@@ -134,6 +134,17 @@ async def _run_research_stream(question: str, max_rounds: int) -> AsyncIterator[
             state = initial_state(
                 question, max_rounds=max_rounds, memories=memories,
                 stream_callback=stream_token_callback,
+                # Phase 3 Milestone 1: this is what actually activates
+                # RunTracker.node() / Tracer.span() per agent — both
+                # objects already existed and were already created once
+                # per run above, but neither was ever wired to a node's
+                # execution before now (see Phase 1 architecture review;
+                # /api/metrics/nodes and /api/traces/{id} always returned
+                # empty data as a result). Agent.__call__ (agents/base.py)
+                # reads these two fields from state and wraps every
+                # agent's run() in both context managers.
+                tracker=tracker,
+                tracer=tracer,
             )
             last_log = 0
             latest_sources = {}

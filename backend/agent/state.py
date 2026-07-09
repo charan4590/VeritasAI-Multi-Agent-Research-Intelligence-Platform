@@ -52,3 +52,9 @@ class AgentState(TypedDict):
     memories: List[Dict[str, Any]]
     # #6: optional callback(token: str) for streaming synthesis tokens
     stream_callback: Optional[Any]
+    # Phase 3 Milestone 1: optional RunTracker/Tracer instances, read by
+    # Agent.__call__ (agents/base.py) to record per-agent metrics/tracing.
+    # Same pattern as stream_callback above — optional, set once per
+    # request in main.py, None in any test that builds state directly.
+    tracker: Optional[Any]
+    tracer: Optional[Any]
