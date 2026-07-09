@@ -16,9 +16,11 @@ Key improvements:
 import os
 import re
 import json
+import time
 import uuid
 import logging
-from typing import Optional
+from typing import Optional, Dict, List
+from concurrent.futures import ThreadPoolExecutor
 
 from langgraph.graph import StateGraph, START, END
 
@@ -178,6 +180,79 @@ def planner_node(state: AgentState) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Milestone 2: concurrent full-content fetch
+# ---------------------------------------------------------------------------
+# fetch_full_content() (tools.py) is a single blocking requests.get() with
+# its own timeout. search_node previously called it one at a time inside
+# its main loop — up to MAX_FULL_FETCHES (6) sequential blocking calls, each
+# with an 8s timeout, so a worst case of ~48s was possible on top of every
+# other cost in a research run. This was the largest remaining sequential
+# bottleneck after search itself was already parallelized (see
+# web_search_batch / academic_web_search_batch in tools.py, which this
+# helper deliberately mirrors: same ThreadPoolExecutor pattern, same
+# per-future try/except so one bad fetch can't take down the batch).
+
+FULL_FETCH_TIMEOUT = int(os.environ.get("FULL_FETCH_TIMEOUT", "8"))  # unchanged default
+
+
+def _fetch_full_content_batch(urls: List[str], timeout: int = FULL_FETCH_TIMEOUT) -> Dict[str, Optional[str]]:
+    """
+    Fetch full page content for multiple URLs concurrently.
+
+    - Deduplicates URLs before dispatch (dict.fromkeys preserves order;
+      each unique URL is fetched at most once even if passed in twice).
+    - Respects the existing per-request timeout — fetch_full_content's
+      signature and its 8s default are untouched; this only changes how
+      many of those calls are in flight at once, not how long any single
+      one is allowed to take.
+    - Every failure is caught per-future so one slow/broken URL can't
+      block or crash the batch; a failed or empty fetch maps to None,
+      which callers already treat as "no enrichment, keep the search
+      snippet" — the exact same graceful-degradation behavior as before,
+      just reached concurrently instead of serially.
+    - Logs total elapsed time plus a success/failure counter for
+      observability (this was previously invisible — no timing signal
+      existed for this phase at all).
+
+    Returns {url: extracted_text_or_None}.
+    """
+    unique_urls = list(dict.fromkeys(u for u in urls if u))
+    results: Dict[str, Optional[str]] = {}
+    if not unique_urls:
+        return results
+
+    start = time.time()
+    success = 0
+    failed = 0
+
+    with ThreadPoolExecutor(max_workers=min(6, len(unique_urls))) as executor:
+        future_map = {
+            executor.submit(fetch_full_content, url, timeout): url
+            for url in unique_urls
+        }
+        for future in future_map:
+            url = future_map[future]
+            try:
+                content = future.result()
+                results[url] = content
+                if content:
+                    success += 1
+                else:
+                    failed += 1
+            except Exception as exc:
+                logger.error(f"[fetch] concurrent full-content fetch failed: {url!r} — {exc}")
+                results[url] = None
+                failed += 1
+
+    elapsed_ms = int((time.time() - start) * 1000)
+    logger.info(
+        f"[fetch] full-content batch: {len(unique_urls)} urls, "
+        f"{success} enriched, {failed} empty/failed, {elapsed_ms}ms"
+    )
+    return results
+
+
+# ---------------------------------------------------------------------------
 # A: Search — academic queries use academic_web_search + full content fetch
 # ---------------------------------------------------------------------------
 
@@ -194,7 +269,6 @@ def search_node(state: AgentState) -> dict:
 
     MAX_SOURCES = 20
     MAX_FULL_FETCHES = 6
-    full_fetch_count = 0
 
     # #1: Run all queries concurrently instead of sequentially —
     # was the single largest latency contributor (5 queries x ~7s each = 35s+ serial)
@@ -203,13 +277,24 @@ def search_node(state: AgentState) -> dict:
     else:
         batch_results = web_search_batch(queries, max_results=5)
 
+    # --- Pass 1: assemble candidate sources, pick full-content fetch targets ---
+    # Ordering and the MAX_SOURCES/MAX_FULL_FETCHES caps are unchanged from
+    # before — this pass just records *which* URLs qualify for enrichment
+    # instead of fetching them immediately, so Pass 2 can fetch them all at
+    # once. fetch_targets is a dict keyed by URL, so it's inherently
+    # deduplicated; the eligibility check (score_url(url) >= 90) and the
+    # MAX_FULL_FETCHES cap are evaluated in the exact same order sources
+    # are discovered, so which URLs get enriched is identical to before.
+    fetch_targets: Dict[str, int] = {}   # url -> source id
+    pending: "Dict[int, dict]" = {}      # source id -> fields, insertion order preserved
+
     for query in queries:
-        if len(sources) >= MAX_SOURCES:
+        if len(sources) + len(pending) >= MAX_SOURCES:
             break
         results = batch_results.get(query, [])
 
         for result in results:
-            if len(sources) >= MAX_SOURCES:
+            if len(sources) + len(pending) >= MAX_SOURCES:
                 break
             url = result.get("url", "")
             if not url or url in seen_urls:
@@ -218,22 +303,43 @@ def search_node(state: AgentState) -> dict:
 
             snippet = (result.get("content", "") or result.get("snippet", "") or "")[:1500]
 
-            # Only fetch full content for a small number of top sources —
-            # this was the main bottleneck (blocking HTTP call per source)
-            if full_fetch_count < MAX_FULL_FETCHES and score_url(url) >= 90:
-                enriched = fetch_full_content(url)
-                if enriched and len(enriched) > len(snippet):
-                    snippet = snippet + "\n\n[Full content]:\n" + enriched[:1500]
-                full_fetch_count += 1
+            if len(fetch_targets) < MAX_FULL_FETCHES and score_url(url) >= 90:
+                fetch_targets[url] = next_id
 
-            sources[next_id] = Source(
-                id=next_id,
-                url=url,
-                title=result.get("title", url),
-                snippet=snippet[:3000],
-            )
+            pending[next_id] = {
+                "url": url,
+                "title": result.get("title", url),
+                "snippet": snippet,
+            }
             next_id += 1
 
+    # --- Pass 2: fetch full content for every qualifying URL concurrently ---
+    fetch_start = time.time()
+    enriched_by_url = _fetch_full_content_batch(list(fetch_targets.keys())) if fetch_targets else {}
+    fetch_elapsed_ms = int((time.time() - fetch_start) * 1000)
+
+    # --- Pass 3: splice enrichment back into snippets, preserving order ---
+    full_fetch_count = 0
+    enriched_count = 0
+    for src_id, fields in pending.items():
+        url = fields["url"]
+        snippet = fields["snippet"]
+        if url in fetch_targets:
+            full_fetch_count += 1
+            enriched = enriched_by_url.get(url)
+            if enriched and len(enriched) > len(snippet):
+                snippet = snippet + "\n\n[Full content]:\n" + enriched[:1500]
+                enriched_count += 1
+        sources[src_id] = Source(
+            id=src_id,
+            url=url,
+            title=fields["title"],
+            snippet=snippet[:3000],
+        )
+
+    # Credibility ranking/ordering unchanged — still the final sort step,
+    # still descending by score_url, still applied after all sources
+    # (existing + this round's) are assembled.
     sorted_sources = dict(
         sorted(
             sources.items(),
@@ -242,11 +348,23 @@ def search_node(state: AgentState) -> dict:
         )
     )
 
-    logger.info(f"Search round {state['round']+1}: {len(sorted_sources)} sources (intent: {intent}, full-fetched: {full_fetch_count})")
+    log_entries = []
+    if fetch_targets:
+        log_entries.append(
+            f"Full-content fetch: {len(fetch_targets)} urls, "
+            f"{enriched_count} enriched, {fetch_elapsed_ms}ms"
+        )
+    log_entries.append(f"Round {state['round']+1}: gathered {len(sorted_sources)} sources")
+
+    logger.info(
+        f"Search round {state['round']+1}: {len(sorted_sources)} sources "
+        f"(intent: {intent}, full-fetch attempted: {full_fetch_count}, "
+        f"enriched: {enriched_count}, fetch phase: {fetch_elapsed_ms}ms)"
+    )
     return {
         "sources": sorted_sources,
         "round": state["round"] + 1,
-        "log": state["log"] + [f"Round {state['round']+1}: gathered {len(sorted_sources)} sources"],
+        "log": state["log"] + log_entries,
     }
 
 
