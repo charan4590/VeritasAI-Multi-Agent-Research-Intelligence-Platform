@@ -1,0 +1,39 @@
+# Core
+fastapi
+uvicorn[standard]
+python-dotenv
+
+# Agent + LLM
+langgraph
+langchain-ollama
+langchain-core
+langchain-groq
+
+# Search
+tavily-python
+
+# RAG
+chromadb
+
+# Priority 2: Cross-encoder re-ranking
+sentence-transformers
+
+# Priority 5: PDF ingestion
+pypdf
+
+# Retry logic
+tenacity
+
+# Auth
+python-jose[cryptography]
+passlib[bcrypt]
+
+# Testing
+pytest
+pytest-asyncio
+httpx
+
+# Utilities
+pydantic
+groq
+python-multipart

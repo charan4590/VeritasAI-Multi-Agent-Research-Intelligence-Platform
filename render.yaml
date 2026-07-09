@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: research-agent
+    runtime: python
+    region: oregon
+    plan: free
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: TAVILY_API_KEY
+        sync: false          # Set this in Render dashboard
+      - key: GROQ_API_KEY
+        sync: false          # Set this in Render dashboard
+      - key: AUTH_ENABLED
+        value: "false"
+      - key: JWT_SECRET
+        generateValue: true  # Render auto-generates a secure random value
+      - key: DB_PATH
+        value: "/tmp/research.db"
+      - key: CHROMA_PATH
+        value: "/tmp/chroma_db"
+      - key: GROQ_MODEL
+        value: "llama-3.1-8b-instant"
+      - key: EMBED_MODEL
+        value: "nomic-embed-text"
+      - key: MEMORY_TOP_K
+        value: "2"
+      - key: RAG_TOP_K
+        value: "6"

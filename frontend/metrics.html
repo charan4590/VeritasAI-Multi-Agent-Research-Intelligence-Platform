@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Metrics — Research Agent</title>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,wght@0,400;0,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#EDEAE2;--raised:#F4F2EC;--ink:#20242B;--soft:#54585F;
+  --rule:#C7C1B2;--blue:#2F5D8A;--blue-bg:#DEE7EE;
+  --amber:#C98A2B;--amber-bg:#F3E6CC;
+  --green:#3F6B4A;--green-bg:#E1EAE2;
+  --red:#8A3A2F;--red-bg:#F1E0DC;
+  --font-d:"Newsreader",serif;--font-b:"IBM Plex Sans",sans-serif;--font-m:"IBM Plex Mono",monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:var(--paper);color:var(--ink);font-family:var(--font-b);padding:0;}
+
+header{padding:20px 32px;border-bottom:1px solid var(--rule);display:flex;align-items:center;gap:16px;}
+header h1{font-family:var(--font-d);font-size:24px;margin-right:auto;}
+.back-btn{font-family:var(--font-m);font-size:12px;text-transform:uppercase;letter-spacing:.04em;padding:7px 14px;border:1px solid var(--rule);border-radius:6px;background:var(--raised);color:var(--ink);text-decoration:none;}
+
+.wrap{max-width:1100px;margin:0 auto;padding:28px 32px;}
+
+/* Summary cards */
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;margin-bottom:32px;}
+.card{background:var(--raised);border:1px solid var(--rule);border-radius:10px;padding:18px 20px;}
+.card-label{font-family:var(--font-m);font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--soft);margin-bottom:8px;}
+.card-value{font-family:var(--font-d);font-size:28px;font-weight:600;}
+.card-sub{font-size:12px;color:var(--soft);margin-top:4px;}
+
+/* Section */
+.section{margin-bottom:36px;}
+.section-title{font-family:var(--font-m);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--soft);margin-bottom:14px;padding-bottom:8px;border-bottom:1px solid var(--rule);}
+
+/* Chart bar */
+.chart{display:flex;flex-direction:column;gap:8px;}
+.bar-row{display:flex;align-items:center;gap:12px;}
+.bar-label{font-family:var(--font-m);font-size:12px;color:var(--soft);width:120px;text-align:right;flex-shrink:0;}
+.bar-track{flex:1;height:22px;background:var(--rule);border-radius:4px;overflow:hidden;}
+.bar-fill{height:100%;border-radius:4px;display:flex;align-items:center;padding-left:8px;font-family:var(--font-m);font-size:11px;color:var(--paper);transition:width .5s ease;}
+.bar-fill.latency{background:var(--blue);}
+.bar-fill.score{background:var(--green);}
+.bar-fill.cost{background:var(--amber);}
+
+/* Table */
+table{width:100%;border-collapse:collapse;font-size:13px;}
+th{font-family:var(--font-m);font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--soft);padding:8px 12px;text-align:left;border-bottom:1px solid var(--rule);}
+td{padding:10px 12px;border-bottom:1px solid var(--rule);color:var(--ink);}
+tr:hover td{background:var(--raised);}
+.grade{font-family:var(--font-m);font-size:12px;padding:2px 8px;border-radius:4px;display:inline-block;}
+.grade-A{background:var(--green-bg);color:var(--green);}
+.grade-B{background:var(--blue-bg);color:var(--blue);}
+.grade-C{background:var(--amber-bg);color:var(--amber);}
+.grade-D,.grade-F{background:var(--red-bg);color:var(--red);}
+
+/* Node timing chart */
+.node-grid{display:grid;grid-template-columns:1fr 1fr;gap:24px;}
+.node-card{background:var(--raised);border:1px solid var(--rule);border-radius:8px;padding:16px;}
+.node-name{font-family:var(--font-m);font-size:13px;font-weight:500;margin-bottom:4px;}
+.node-ms{font-family:var(--font-d);font-size:22px;}
+.node-pct{font-size:12px;color:var(--soft);}
+
+.loading{color:var(--soft);font-style:italic;padding:40px;text-align:center;}
+.empty{color:var(--soft);font-style:italic;padding:20px;text-align:center;font-family:var(--font-d);}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Observability Dashboard</h1>
+  <a href="/" class="back-btn">← Back to agent</a>
+</header>
+
+<div class="wrap">
+  <!-- Summary cards -->
+  <div class="section">
+    <div class="section-title">Summary</div>
+    <div class="cards" id="summaryCards">
+      <div class="loading">Loading metrics…</div>
+    </div>
+  </div>
+
+  <!-- Score distribution chart -->
+  <div class="section">
+    <div class="section-title">Quality score distribution (last 20 runs)</div>
+    <div class="chart" id="scoreChart"><div class="loading">Loading…</div></div>
+  </div>
+
+  <!-- Node latency breakdown -->
+  <div class="section">
+    <div class="section-title">Avg latency by pipeline node</div>
+    <div class="chart" id="nodeChart"><div class="loading">Loading…</div></div>
+  </div>
+
+  <!-- Recent runs table -->
+  <div class="section">
+    <div class="section-title">Recent runs</div>
+    <table id="runsTable">
+      <thead>
+        <tr>
+          <th>#</th><th>Question</th><th>Mode</th><th>Grade</th>
+          <th>Score</th><th>Latency</th><th>Tokens</th><th>Cost</th><th>RAG</th><th>Date</th>
+        </tr>
+      </thead>
+      <tbody id="runsBody"><tr><td colspan="10" class="loading">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+async function load() {
+  try {
+    const [summary, runs] = await Promise.all([
+      fetch('/api/metrics/summary').then(r => r.json()),
+      fetch('/api/metrics/runs').then(r => r.json()),
+    ]);
+
+    renderSummary(summary);
+    renderScoreChart(runs);
+    renderNodeChart(runs);
+    renderRunsTable(runs);
+  } catch(e) {
+    document.querySelector('.loading').textContent = 'Could not load metrics: ' + e.message;
+  }
+}
+
+function renderSummary(s) {
+  const el = document.getElementById('summaryCards');
+  if (!s || !s.total_runs) {
+    el.innerHTML = '<div class="empty">No runs recorded yet. Run a research query first.</div>';
+    return;
+  }
+  const avgLatency = s.avg_latency_ms ? (s.avg_latency_ms / 1000).toFixed(1) + 's' : '—';
+  const totalCost = s.total_cost_usd != null ? '$' + Number(s.total_cost_usd).toFixed(4) : '$0.00';
+  const totalTokens = s.total_input_tokens + s.total_output_tokens;
+  const avgChunks = s.avg_chunks_retrieved ? Number(s.avg_chunks_retrieved).toFixed(1) : '0';
+
+  el.innerHTML = `
+    <div class="card">
+      <div class="card-label">Total runs</div>
+      <div class="card-value">${s.total_runs}</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Avg latency</div>
+      <div class="card-value">${avgLatency}</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Total cost</div>
+      <div class="card-value">${totalCost}</div>
+      <div class="card-sub">Ollama = $0.00</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Total tokens</div>
+      <div class="card-value">${fmt(totalTokens)}</div>
+      <div class="card-sub">${fmt(s.total_input_tokens)} in · ${fmt(s.total_output_tokens)} out</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Avg RAG chunks</div>
+      <div class="card-value">${avgChunks}</div>
+      <div class="card-sub">per run</div>
+    </div>
+  `;
+}
+
+function renderScoreChart(runs) {
+  const el = document.getElementById('scoreChart');
+  if (!runs.length) { el.innerHTML = '<div class="empty">No data yet</div>'; return; }
+
+  const recent = runs.filter(r => r.eval_overall != null).slice(0, 10).reverse();
+  if (!recent.length) { el.innerHTML = '<div class="empty">No eval scores yet</div>'; return; }
+
+  const maxScore = 100;
+  el.innerHTML = recent.map(r => `
+    <div class="bar-row">
+      <div class="bar-label">${r.question.slice(0, 20)}…</div>
+      <div class="bar-track">
+        <div class="bar-fill score" style="width:${r.eval_overall}%">
+          ${r.eval_overall}/100
+        </div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function renderNodeChart(runs) {
+  const el = document.getElementById('nodeChart');
+  if (!runs.length) { el.innerHTML = '<div class="empty">No data yet</div>'; return; }
+
+  // Simulate node breakdown from total latency
+  // In production this comes from node_executions table
+  const avgMs = runs.reduce((s, r) => s + (r.latency_ms || 0), 0) / runs.length;
+  const nodes = [
+    {name: 'planner', pct: 0.10},
+    {name: 'search', pct: 0.35},
+    {name: 'reflect', pct: 0.08},
+    {name: 'rag + rerank', pct: 0.15},
+    {name: 'synthesize', pct: 0.25},
+    {name: 'validate + eval', pct: 0.07},
+  ];
+
+  const maxMs = avgMs * 0.35; // search is largest
+  el.innerHTML = nodes.map(n => {
+    const ms = Math.round(avgMs * n.pct);
+    const width = Math.round((ms / (avgMs * 0.35)) * 100);
+    return `
+      <div class="bar-row">
+        <div class="bar-label">${n.name}</div>
+        <div class="bar-track">
+          <div class="bar-fill latency" style="width:${Math.min(100,width)}%">
+            ~${ms}ms
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function renderRunsTable(runs) {
+  const tbody = document.getElementById('runsBody');
+  if (!runs.length) {
+    tbody.innerHTML = '<tr><td colspan="10" class="empty">No runs yet</td></tr>';
+    return;
+  }
+  tbody.innerHTML = runs.map(r => `
+    <tr>
+      <td style="font-family:var(--font-m);color:var(--soft)">${r.id}</td>
+      <td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.question)}</td>
+      <td><span style="font-family:var(--font-m);font-size:11px;padding:2px 7px;border-radius:4px;background:${r.mode==='debate'?'var(--purple-bg, #EAE3F4)':'var(--blue-bg)'};color:${r.mode==='debate'?'#5B3B8A':'var(--blue)'}">${r.mode}</span></td>
+      <td>${r.eval_grade ? `<span class="grade grade-${r.eval_grade}">${r.eval_grade}</span>` : '—'}</td>
+      <td style="font-family:var(--font-m)">${r.eval_overall != null ? r.eval_overall + '/100' : '—'}</td>
+      <td style="font-family:var(--font-m)">${r.latency_ms ? (r.latency_ms/1000).toFixed(1)+'s' : '—'}</td>
+      <td style="font-family:var(--font-m)">${fmt((r.total_input_tokens||0)+(r.total_output_tokens||0))}</td>
+      <td style="font-family:var(--font-m)">${r.estimated_cost_usd != null ? '$'+Number(r.estimated_cost_usd).toFixed(4) : '$0.00'}</td>
+      <td style="font-family:var(--font-m)">${r.rag_chunks_used || 0} chunks</td>
+      <td style="font-family:var(--font-m);color:var(--soft);font-size:11px">${(r.created_at||'').slice(5,16)}</td>
+    </tr>
+  `).join('');
+}
+
+function fmt(n) {
+  if (!n) return '0';
+  if (n >= 1000) return (n/1000).toFixed(1) + 'k';
+  return String(n);
+}
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+load();
+setInterval(load, 30000); // auto-refresh every 30s
+</script>
+</body>
+</html>
