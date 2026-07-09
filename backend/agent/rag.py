@@ -24,6 +24,8 @@ import hashlib
 import requests
 from typing import List, Dict, Optional, Tuple
 
+from .cache import get_embed_cache
+
 OLLAMA_BASE = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "nomic-embed-text")
 CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", "300"))   # tokens ≈ chars/4
@@ -64,15 +66,35 @@ def embed_text(text: str) -> Optional[List[float]]:
     """
     Call Ollama's /api/embeddings endpoint.
     Returns None if Ollama is unavailable so RAG degrades gracefully.
+
+    Milestone 3: cached by (EMBED_MODEL, truncated text) — namespace
+    "embed", default TTL EMBED_CACHE_TTL (7 days). Embeddings are a pure,
+    deterministic function of the model + input text, so this is the
+    safest of the three caches to hold for a long time; the model is part
+    of the key specifically so switching EMBED_MODEL never serves a
+    vector from a different embedding space. Only a successful embedding
+    (non-None) is cached — a failed Ollama call falls straight through
+    without writing to the cache, so it's retried next time rather than
+    "stuck" returning None for the TTL window.
     """
+    truncated = text[:2000]
+    cache = get_embed_cache()
+    cache_key = f"{EMBED_MODEL}|{truncated}"
+    cached, hit = cache.get(cache_key)
+    if hit:
+        return cached
+
     try:
         resp = requests.post(
             f"{OLLAMA_BASE}/api/embeddings",
-            json={"model": EMBED_MODEL, "prompt": text[:2000]},
+            json={"model": EMBED_MODEL, "prompt": truncated},
             timeout=30,
         )
         resp.raise_for_status()
-        return resp.json().get("embedding")
+        embedding = resp.json().get("embedding")
+        if embedding:
+            cache.set(cache_key, embedding)
+        return embedding
     except Exception as exc:
         print(f"[rag] embedding failed: {exc}")
         return None

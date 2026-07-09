@@ -19,6 +19,8 @@ from tenacity import (
     retry_if_exception_type, before_sleep_log,
 )
 
+from .cache import get_search_cache, get_fetch_cache
+
 logger = logging.getLogger(__name__)
 
 _client = None
@@ -76,9 +78,23 @@ def _search_with_retry(query: str, max_results: int) -> List[Dict[str, Any]]:
 def web_search(query: str, max_results: int = 5) -> List[Dict[str, Any]]:
     """
     Standard web search with retry. Returns empty list on failure.
+
+    Milestone 3: results are cached (namespace "search", default TTL
+    SEARCH_CACHE_TTL). Only a *successful* result is cached — a failure
+    falls straight through to the except block below without touching the
+    cache, so a transient Tavily outage can't get "stuck" returning an
+    empty list for the full TTL window once the API recovers.
     """
+    cache = get_search_cache()
+    cache_key = f"{query}|{max_results}"
+    cached, hit = cache.get(cache_key)
+    if hit:
+        return cached
+
     try:
-        return _search_with_retry(query, max_results) or []
+        results = _search_with_retry(query, max_results) or []
+        cache.set(cache_key, results)
+        return results
     except Exception as exc:
         logger.error(f"[search] permanently failed: {query!r} — {exc}")
         return []
@@ -226,7 +242,21 @@ def fetch_full_content(url: str, timeout: int = 8) -> Optional[str]:
 
     Returns extracted text or None if fetch fails.
     Only fetches from known academic domains to avoid privacy/legal issues.
+
+    Milestone 3: cached by URL alone (namespace "fetch", default TTL
+    FETCH_CACHE_TTL — 24h by default, since page content for these domains
+    is effectively static hour-to-hour). `timeout` is intentionally not
+    part of the cache key: it affects how long we're willing to wait for
+    a given fetch, not what content comes back. Only a genuinely
+    successful, long-enough extraction is cached — disallowed domains,
+    too-short content, and errors all fall through without writing to the
+    cache, so they're retried (not "stuck") on the next call.
     """
+    cache = get_fetch_cache()
+    cached, hit = cache.get(url)
+    if hit:
+        return cached
+
     try:
         from urllib.parse import urlparse
         domain = urlparse(url).netloc.replace("www.", "")
@@ -249,7 +279,9 @@ def fetch_full_content(url: str, timeout: int = 8) -> Optional[str]:
         if len(text) < 500:
             return None
 
-        return text[:3000]
+        content = text[:3000]
+        cache.set(url, content)
+        return content
 
     except Exception as exc:
         logger.debug(f"[fetch] failed for {url}: {exc}")
