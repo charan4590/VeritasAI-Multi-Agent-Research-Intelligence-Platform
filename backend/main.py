@@ -160,14 +160,12 @@ async def _run_research_stream(question: str, max_rounds: int) -> AsyncIterator[
                         last_log = len(log)
                     if "sources" in partial:
                         latest_sources = partial["sources"]
-                    # Phase 3 Milestone 3: fact_verify is now the graph's
-                    # actual last node, running after validate. Merging
-                    # (not overwriting) means this doesn't need to know
-                    # the full field list either node returns — validate's
-                    # report/citations_used and fact_verify's
-                    # citation_verification/citation_confidence end up
-                    # in the same dict either way.
-                    if node in ("validate", "fact_verify"):
+                    # Phase 3 Milestone 4: risk_analyze joined fact_verify
+                    # as a terminal node after validate. Same merge
+                    # rationale as the Milestone 3 comment above — none of
+                    # these three nodes need to know each other's field
+                    # lists.
+                    if node in ("validate", "fact_verify", "risk_analyze"):
                         final_state = {**(final_state or {}), **partial}
 
             if not final_state:
@@ -229,6 +227,13 @@ async def _run_research_stream(question: str, max_rounds: int) -> AsyncIterator[
                 # Phase 3 Milestone 3
                 citation_verification=final_state.get("citation_verification", []),
                 citation_confidence=final_state.get("citation_confidence"),
+                # Phase 3 Milestone 4
+                risk_score=final_state.get("risk_score"),
+                risk_level=final_state.get("risk_level"),
+                identified_risks=final_state.get("identified_risks", []),
+                evidence_gaps=final_state.get("evidence_gaps", []),
+                conflicting_claims=final_state.get("conflicting_claims", []),
+                recommended_follow_up_questions=final_state.get("recommended_follow_up_questions", []),
             )
 
             store_memory(session_id=session_id, question=question,
@@ -252,6 +257,13 @@ async def _run_research_stream(question: str, max_rounds: int) -> AsyncIterator[
                 # present so the frontend never needs an `in` check.
                 "citation_verification": final_state.get("citation_verification", []),
                 "citation_confidence": final_state.get("citation_confidence"),
+                # Phase 3 Milestone 4: same "always present" contract.
+                "risk_score": final_state.get("risk_score"),
+                "risk_level": final_state.get("risk_level"),
+                "identified_risks": final_state.get("identified_risks", []),
+                "evidence_gaps": final_state.get("evidence_gaps", []),
+                "conflicting_claims": final_state.get("conflicting_claims", []),
+                "recommended_follow_up_questions": final_state.get("recommended_follow_up_questions", []),
             }))
 
         except StreamAborted:

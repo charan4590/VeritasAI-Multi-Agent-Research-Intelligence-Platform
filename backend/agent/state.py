@@ -73,3 +73,16 @@ class AgentState(TypedDict):
     # for any of the same reasons.
     citation_verification: List[Dict[str, Any]]
     citation_confidence: Optional[int]
+    # Phase 3 Milestone 4: Risk Analysis
+    # risk_score: 0-100, HIGHER = MORE RISK (deliberately the opposite
+    # polarity of evaluator.py's hallucination_risk_score, where higher
+    # is better — see risk_analysis.py's module docstring for why).
+    # All fields default to "nothing found / not run yet" — [] / None /
+    # "Low" — so a session predating this milestone or a graceful
+    # fallback both read the same way to any consumer.
+    risk_score: Optional[int]
+    risk_level: Optional[str]
+    identified_risks: List[str]
+    evidence_gaps: List[str]
+    conflicting_claims: List[str]
+    recommended_follow_up_questions: List[str]

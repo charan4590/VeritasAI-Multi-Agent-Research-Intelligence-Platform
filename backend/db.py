@@ -1,6 +1,6 @@
 """
-Database layer — updated for Phase 3 (evaluation scores, fact verification)
-and Phase 2 (observability).
+Database layer — updated for Phase 3 (evaluation scores, fact verification,
+risk analysis) and Phase 2 (observability).
 """
 import sqlite3
 import json
@@ -21,9 +21,9 @@ def _ensure_column(conn, table: str, column: str, coltype: str):
     Adds `column` to `table` if it doesn't already exist. Needed because
     `CREATE TABLE IF NOT EXISTS` is a no-op against a database that
     already has the `history` table from before this migration — without
-    this, save_session() would fail with "no such column" on any
-    pre-Milestone-3 database. Portable across SQLite versions (doesn't
-    rely on `ADD COLUMN IF NOT EXISTS`, which is a fairly recent addition).
+    this, save_session() would fail with "no such column" on any older
+    database. Portable across SQLite versions (doesn't rely on
+    `ADD COLUMN IF NOT EXISTS`, which is a fairly recent addition).
     """
     existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
     if column not in existing:
@@ -57,13 +57,26 @@ def init_db():
                 -- Phase 3 Milestone 3: Fact Verification
                 citation_verification TEXT DEFAULT '[]',
                 citation_confidence INTEGER DEFAULT NULL,
+                -- Phase 3 Milestone 4: Risk Analysis
+                risk_score INTEGER DEFAULT NULL,
+                risk_level TEXT DEFAULT NULL,
+                identified_risks TEXT DEFAULT '[]',
+                evidence_gaps TEXT DEFAULT '[]',
+                conflicting_claims TEXT DEFAULT '[]',
+                recommended_follow_up_questions TEXT DEFAULT '[]',
                 created_at TEXT DEFAULT (datetime('now'))
             )
         """)
         # Safe no-op on a fresh DB (columns already exist from the CREATE
-        # above); adds the columns in place on a pre-Milestone-3 database.
+        # above); adds the columns in place on an older database.
         _ensure_column(conn, "history", "citation_verification", "TEXT DEFAULT '[]'")
         _ensure_column(conn, "history", "citation_confidence", "INTEGER DEFAULT NULL")
+        _ensure_column(conn, "history", "risk_score", "INTEGER DEFAULT NULL")
+        _ensure_column(conn, "history", "risk_level", "TEXT DEFAULT NULL")
+        _ensure_column(conn, "history", "identified_risks", "TEXT DEFAULT '[]'")
+        _ensure_column(conn, "history", "evidence_gaps", "TEXT DEFAULT '[]'")
+        _ensure_column(conn, "history", "conflicting_claims", "TEXT DEFAULT '[]'")
+        _ensure_column(conn, "history", "recommended_follow_up_questions", "TEXT DEFAULT '[]'")
         conn.commit()
 
 
@@ -79,6 +92,12 @@ def save_session(
     latency_ms: int = 0,
     citation_verification: Optional[List[Dict]] = None,
     citation_confidence: Optional[int] = None,
+    risk_score: Optional[int] = None,
+    risk_level: Optional[str] = None,
+    identified_risks: Optional[List[str]] = None,
+    evidence_gaps: Optional[List[str]] = None,
+    conflicting_claims: Optional[List[str]] = None,
+    recommended_follow_up_questions: Optional[List[str]] = None,
 ) -> int:
     eval_scores = eval_scores or {}
     with get_conn() as conn:
@@ -88,8 +107,10 @@ def save_session(
                 eval_overall, eval_relevance, eval_citations,
                 eval_diversity, eval_hallucination, eval_grade, eval_details,
                 rag_chunks_used, latency_ms,
-                citation_verification, citation_confidence
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                citation_verification, citation_confidence,
+                risk_score, risk_level, identified_risks, evidence_gaps,
+                conflicting_claims, recommended_follow_up_questions
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             question, report, json.dumps(sources), confidence, mode,
             json.dumps(follow_ups),
@@ -104,9 +125,27 @@ def save_session(
             latency_ms,
             json.dumps(citation_verification or []),
             citation_confidence,
+            risk_score,
+            risk_level,
+            json.dumps(identified_risks or []),
+            json.dumps(evidence_gaps or []),
+            json.dumps(conflicting_claims or []),
+            json.dumps(recommended_follow_up_questions or []),
         ))
         conn.commit()
         return cur.lastrowid
+
+
+def _decode_row(d: Dict) -> Dict:
+    d["sources"] = json.loads(d.get("sources") or "{}")
+    d["follow_ups"] = json.loads(d.get("follow_ups") or "[]")
+    d["eval_details"] = json.loads(d.get("eval_details") or "{}")
+    d["citation_verification"] = json.loads(d.get("citation_verification") or "[]")
+    d["identified_risks"] = json.loads(d.get("identified_risks") or "[]")
+    d["evidence_gaps"] = json.loads(d.get("evidence_gaps") or "[]")
+    d["conflicting_claims"] = json.loads(d.get("conflicting_claims") or "[]")
+    d["recommended_follow_up_questions"] = json.loads(d.get("recommended_follow_up_questions") or "[]")
+    return d
 
 
 def get_history(limit: int = 50) -> List[Dict]:
@@ -114,15 +153,7 @@ def get_history(limit: int = 50) -> List[Dict]:
         rows = conn.execute(
             "SELECT * FROM history ORDER BY created_at DESC LIMIT ?", (limit,)
         ).fetchall()
-    result = []
-    for r in rows:
-        d = dict(r)
-        d["sources"] = json.loads(d.get("sources") or "{}")
-        d["follow_ups"] = json.loads(d.get("follow_ups") or "[]")
-        d["eval_details"] = json.loads(d.get("eval_details") or "{}")
-        d["citation_verification"] = json.loads(d.get("citation_verification") or "[]")
-        result.append(d)
-    return result
+    return [_decode_row(dict(r)) for r in rows]
 
 
 def get_session(session_id: int) -> Optional[Dict]:
@@ -132,12 +163,7 @@ def get_session(session_id: int) -> Optional[Dict]:
         ).fetchone()
     if not row:
         return None
-    d = dict(row)
-    d["sources"] = json.loads(d.get("sources") or "{}")
-    d["follow_ups"] = json.loads(d.get("follow_ups") or "[]")
-    d["eval_details"] = json.loads(d.get("eval_details") or "{}")
-    d["citation_verification"] = json.loads(d.get("citation_verification") or "[]")
-    return d
+    return _decode_row(dict(row))
 
 
 def delete_session(session_id: int):

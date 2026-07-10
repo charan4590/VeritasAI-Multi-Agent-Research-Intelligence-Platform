@@ -8,16 +8,15 @@ should do: build the LangGraph StateGraph and wire edges. It no longer
 contains any agent business logic itself.
 
 Pipeline:
-  planner → search → reflect → rag → synthesize → validate → fact_verify
+  planner → search → reflect → rag → synthesize → validate → fact_verify → risk_analyze
                         ^__________|  (loop back to search while insufficient,
                                        capped at max_rounds)
 
-Phase 3 Milestone 3 adds `fact_verify` as the new final node — this is
-the first topology change since Milestone 1 (everything before this was
-a pure refactor that kept the graph shape identical). FactVerificationAgent
-runs after validate/CitationAgent, on the already-validated report, and
-never blocks or alters it on failure (see fact_verification.py's module
-docstring for the full fallback contract).
+Phase 3 Milestone 3 added `fact_verify`; Milestone 4 adds `risk_analyze`
+as the new final node. Both run after the report is already validated,
+and neither blocks or alters it on failure — see each agent's module
+docstring for its own fallback contract (fact_verification.py,
+risk_analysis.py).
 
 `reflect` stays a plain function here, not an Agent subclass, and is
 deliberately NOT wrapped with tracker/tracer instrumentation — that
@@ -33,7 +32,7 @@ from .state import AgentState, ReflectionDecision
 from .reflection import smart_reflect
 from .agents import (
     PlannerAgent, SupervisorAgent, RAGAgent, ReportGeneratorAgent,
-    CitationAgent, FactVerificationAgent,
+    CitationAgent, FactVerificationAgent, RiskAnalysisAgent,
     _detect_research_intent,  # re-exported: main.py does `from agent.graph import _detect_research_intent`
 )
 
@@ -90,6 +89,7 @@ def build_graph():
     g.add_node("synthesize", ReportGeneratorAgent())
     g.add_node("validate", CitationAgent())
     g.add_node("fact_verify", FactVerificationAgent())
+    g.add_node("risk_analyze", RiskAnalysisAgent())
 
     g.add_edge(START, "planner")
     g.add_edge("planner", "search")
@@ -101,7 +101,8 @@ def build_graph():
     g.add_edge("rag", "synthesize")
     g.add_edge("synthesize", "validate")
     g.add_edge("validate", "fact_verify")
-    g.add_edge("fact_verify", END)
+    g.add_edge("fact_verify", "risk_analyze")
+    g.add_edge("risk_analyze", END)
     return g.compile()
 
 
@@ -121,4 +122,10 @@ def initial_state(question: str, max_rounds: int = 2,
         tracer=tracer,
         citation_verification=[],
         citation_confidence=None,
+        risk_score=None,
+        risk_level=None,
+        identified_risks=[],
+        evidence_gaps=[],
+        conflicting_claims=[],
+        recommended_follow_up_questions=[],
     )

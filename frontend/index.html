@@ -122,6 +122,23 @@ header h1{font-family:var(--font-d);font-size:22px;margin-right:auto;}
 .verify-unsupported{color:var(--red);}
 .verify-unknown{color:var(--soft);}
 
+/* Phase 3 Milestone 4: Risk Analysis */
+#riskAnalysis{margin:20px 0;padding:14px;background:var(--raised);border:1px solid var(--rule);border-radius:8px;}
+.ra-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
+.ra-label{font-family:var(--font-m);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--soft);}
+.ra-badge{font-family:var(--font-m);font-size:11px;font-weight:700;padding:2px 8px;border:1px solid;border-radius:999px;}
+.ra-score-row{margin-bottom:10px;}
+.ra-score-row .track{height:8px;background:var(--rule);border-radius:999px;overflow:hidden;}
+.ra-score-row .fill{height:100%;border-radius:999px;transition:width .6s ease;}
+.ra-score-text{font-family:var(--font-m);font-size:12px;color:var(--soft);margin-top:6px;}
+.ra-sublabel{font-family:var(--font-m);font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--soft);margin:10px 0 4px;}
+.ra-item{font-family:var(--font-b);font-size:13px;line-height:1.4;padding:6px 10px;margin-bottom:4px;border-radius:6px;border-left:3px solid;}
+.ra-risk{background:var(--amber-bg);border-color:var(--amber);color:var(--ink);}
+.ra-gap{background:var(--blue-bg);border-color:var(--blue);color:var(--ink);}
+.ra-conflict{background:var(--red-bg);border-color:var(--red);color:var(--ink);}
+.ra-fu-btn{display:block;width:100%;text-align:left;padding:8px 12px;margin-bottom:4px;background:var(--paper);border:1px solid var(--rule);border-radius:6px;font-family:var(--font-b);font-size:12px;color:var(--ink);cursor:pointer;}
+.ra-fu-btn:hover{background:var(--blue-bg);border-color:var(--blue);}
+
 /* FOLLOW-UPS */
 #followUps{margin:16px 0;}
 #followUps .fu-label{font-family:var(--font-m);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--soft);margin-bottom:8px;}
@@ -250,6 +267,20 @@ header h1{font-family:var(--font-d);font-size:22px;margin-right:auto;}
         <div id="followUps" style="display:none">
           <div class="fu-label">Follow-up questions</div>
           <div id="fuButtons"></div>
+        </div>
+        <div id="riskAnalysis" style="display:none">
+          <div class="ra-header">
+            <span class="ra-label">Risk Analysis</span>
+            <span class="ra-badge" id="raBadge"></span>
+          </div>
+          <div class="ra-score-row">
+            <div class="track"><div class="fill" id="raFill" style="width:0%"></div></div>
+            <div class="ra-score-text" id="raScoreText"></div>
+          </div>
+          <div id="raRisks"></div>
+          <div id="raGaps"></div>
+          <div id="raConflicts"></div>
+          <div id="raFollowups"></div>
         </div>
       </div>
     </div>
@@ -389,6 +420,7 @@ function startResearch() {
   document.getElementById('confidenceBar').style.display = 'none';
   document.getElementById('citationConfidence').style.display = 'none';
   document.getElementById('followUps').style.display = 'none';
+  document.getElementById('riskAnalysis').style.display = 'none';
   document.getElementById('submitBtn').disabled = true;
   setStatus('planning', 'active');
 
@@ -430,6 +462,7 @@ function startResearch() {
       showConfidence(data.confidence || 0);
       showCitationConfidence(data.citation_confidence, (data.citation_verification || []).length);
       showFollowUps(data.follow_ups || []);
+      showRiskAnalysis(data);
       document.getElementById('reportActions').style.display = 'flex';
       setStatus('done', 'done');
       document.getElementById('submitBtn').disabled = false;
@@ -467,6 +500,7 @@ function newResearch() {
   document.getElementById('confidenceBar').style.display = 'none';
   document.getElementById('citationConfidence').style.display = 'none';
   document.getElementById('followUps').style.display = 'none';
+  document.getElementById('riskAnalysis').style.display = 'none';
   document.getElementById('log').innerHTML = '';
 
   setStatus('idle', '');
@@ -621,6 +655,50 @@ function askFollowUp(q) {
   startResearch();
 }
 
+// ---- Risk Analysis (Phase 3 Milestone 4) ----
+function showRiskAnalysis(data) {
+  const el = document.getElementById('riskAnalysis');
+  const score = data.risk_score;
+  if (score === null || score === undefined) {
+    el.style.display = 'none';
+    return;
+  }
+  el.style.display = 'block';
+
+  const level = data.risk_level || 'Low';
+  const levelColors = { Low: 'var(--green)', Medium: 'var(--amber)', High: 'var(--red)' };
+  const color = levelColors[level] || 'var(--soft)';
+
+  const badge = document.getElementById('raBadge');
+  badge.textContent = `${level} Risk`;
+  badge.style.color = color;
+  badge.style.borderColor = color;
+
+  const fill = document.getElementById('raFill');
+  fill.style.width = `${score}%`;
+  fill.style.background = color;
+  document.getElementById('raScoreText').textContent = `Risk score: ${score}/100`;
+
+  const renderList = (elId, label, items, cls) => {
+    const container = document.getElementById(elId);
+    if (!items || !items.length) { container.innerHTML = ''; return; }
+    container.innerHTML = `<div class="ra-sublabel">${label}</div>` +
+      items.map(t => `<div class="ra-item ${cls}">${escHtml(t)}</div>`).join('');
+  };
+  renderList('raRisks', 'Identified risks', data.identified_risks, 'ra-risk');
+  renderList('raGaps', 'Evidence gaps', data.evidence_gaps, 'ra-gap');
+  renderList('raConflicts', 'Conflicting claims', data.conflicting_claims, 'ra-conflict');
+
+  const fuContainer = document.getElementById('raFollowups');
+  const fu = data.recommended_follow_up_questions || [];
+  if (fu.length) {
+    fuContainer.innerHTML = `<div class="ra-sublabel">Recommended follow-up questions</div>` +
+      fu.map(q => `<button type="button" class="ra-fu-btn" onclick="askFollowUp(this.textContent)">↳ ${escHtml(q)}</button>`).join('');
+  } else {
+    fuContainer.innerHTML = '';
+  }
+}
+
 // ---- Source drawer (Feature 4) ----
 function openSource(id) {
   const s = sources[id] || sources[String(id)];
@@ -682,6 +760,7 @@ async function loadSession(id) {
     showConfidence(row.confidence || 0);
     showCitationConfidence(row.citation_confidence, (row.citation_verification || []).length);
     showFollowUps(row.follow_ups || []);
+    showRiskAnalysis(row);
     document.getElementById('reportActions').style.display = 'flex';
     document.getElementById('log').innerHTML = '<p class="log-placeholder">Loaded from history</p>';
     setStatus('done', 'done');

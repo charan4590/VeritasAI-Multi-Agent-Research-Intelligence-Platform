@@ -57,6 +57,10 @@ EMBED_CACHE_TTL = int(os.environ.get("EMBED_CACHE_TTL", "604800"))
 # near-deterministic judgment (same inputs, same LLM, same question asked)
 # so it gets a long TTL, same as embeddings.
 VERIFICATION_CACHE_TTL = int(os.environ.get("VERIFICATION_CACHE_TTL", "604800"))
+# Phase 3 Milestone 4: recommended follow-up questions are keyed on the
+# risk signals themselves (not the raw report text), so they're stable
+# across near-identical reports for the same question — long TTL is safe.
+RISK_CACHE_TTL = int(os.environ.get("RISK_CACHE_TTL", "604800"))
 
 # Sentinel distinguishing "key not present / expired" from "cached value is
 # legitimately None or falsy" — a plain `None` return can't tell those apart.
@@ -277,6 +281,7 @@ _TTLS = {
     "fetch": FETCH_CACHE_TTL,
     "embed": EMBED_CACHE_TTL,
     "verification": VERIFICATION_CACHE_TTL,
+    "risk": RISK_CACHE_TTL,
 }
 
 
@@ -305,6 +310,10 @@ def get_verification_cache() -> Cache:
     return _get_or_create("verification")
 
 
+def get_risk_cache() -> Cache:
+    return _get_or_create("risk")
+
+
 def get_all_cache_stats() -> List[Dict[str, Any]]:
     """Aggregate hit/miss metrics across all active caches. No route
     currently exposes this over HTTP (out of scope for this milestone —
@@ -314,4 +323,5 @@ def get_all_cache_stats() -> List[Dict[str, Any]]:
     return [
         get_search_cache().stats(), get_fetch_cache().stats(),
         get_embed_cache().stats(), get_verification_cache().stats(),
+        get_risk_cache().stats(),
     ]
