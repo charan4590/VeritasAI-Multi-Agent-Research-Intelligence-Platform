@@ -1,5 +1,6 @@
 """
-SupervisorAgent — Phase 3 Milestone 1.
+SupervisorAgent — Phase 3 Milestone 1 (search orchestration),
+extended in Phase 3 Milestone 2 (PDF evidence merge).
 
 Owns the "search" LangGraph node. This is the one node in the pipeline
 that genuinely needs an orchestrator rather than a single agent: which
@@ -9,15 +10,19 @@ and the concurrent full-content-fetch / splice / credibility-sort work
 that follows is shared by both search strategies rather than being
 specific to either one of them.
 
-Everything below is the exact same logic that lived in graph.py's
-search_node (itself already restructured once, in Milestone 2, into the
-gather-candidates / concurrent-fetch / splice-back passes) — the only
-change in this milestone is *which* function decides web vs. academic:
-that single line now delegates to self.web_agent.search(...) or
-self.academic_agent.search(...) instead of calling
-web_search_batch/academic_web_search_batch directly. Everything else —
-MAX_SOURCES, MAX_FULL_FETCHES, dedup, timeout handling, credibility
-ordering, log messages — is unchanged.
+Milestone 2 adds a third source: PDFAgent, queried unconditionally
+alongside web/academic search for the same queries. This is safe to do
+unconditionally because PDFAgent's underlying search_pdfs() already
+degrades to [] per query in ~1ms when no PDFs have been uploaded (see
+pdf_agent.py's docstring) — so when a session has no uploaded PDFs, the
+merged result set is byte-for-byte identical to before this milestone.
+PDF chunks are folded into the exact same candidate-gathering loop as
+web results, so they get sequential citation ids from the same counter
+(no separate numbering scheme) and flow through the same RAG indexing,
+credibility sort, and citation validation as any other source — the
+only thing that marks a source as PDF-derived is its `source_type`
+field, read defensively (`.get("source_type", "web")`) by every
+downstream consumer.
 """
 
 import os
@@ -32,6 +37,7 @@ from ..credibility import score_url
 from .base import Agent
 from .intent import _detect_research_intent
 from .search import WebResearchAgent, AcademicSearchAgent
+from .pdf_agent import PDFAgent
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +98,7 @@ class SupervisorAgent(Agent):
     def __init__(self):
         self.web_agent = WebResearchAgent()
         self.academic_agent = AcademicSearchAgent()
+        self.pdf_agent = PDFAgent()
 
     def trace_inputs(self, state: AgentState):
         return {
@@ -119,16 +126,31 @@ class SupervisorAgent(Agent):
         else:
             batch_results = self.web_agent.search(queries)
 
+        # Milestone 2: PDF evidence, queried unconditionally (see module
+        # docstring — this is a no-op, not just "cheap", when no PDFs
+        # have been uploaded).
+        pdf_batch_results = self.pdf_agent.search(queries)
+
         # --- Pass 1: assemble candidate sources, pick full-content fetch targets ---
+        # PDF chunks are appended after web/academic results for the same
+        # query, so uploaded documents supplement rather than crowd out
+        # fresh web evidence when both exist — but they share the exact
+        # same next_id counter, MAX_SOURCES cap, and dedup set as web
+        # results, so citation numbering is one continuous sequence
+        # regardless of source type (no separate "PDF numbering" scheme).
         fetch_targets: Dict[str, int] = {}
         pending: "Dict[int, dict]" = {}
+        pdf_chunks_retrieved = 0
 
         for query in queries:
             if len(sources) + len(pending) >= MAX_SOURCES:
                 break
-            results = batch_results.get(query, [])
+            web_results = batch_results.get(query, [])
+            pdf_results = pdf_batch_results.get(query, [])
+            pdf_chunks_retrieved += len(pdf_results)
+            combined_results = list(web_results) + list(pdf_results)
 
-            for result in results:
+            for result in combined_results:
                 if len(sources) + len(pending) >= MAX_SOURCES:
                     break
                 url = result.get("url", "")
@@ -137,7 +159,13 @@ class SupervisorAgent(Agent):
                 seen_urls.add(url)
 
                 snippet = (result.get("content", "") or result.get("snippet", "") or "")[:1500]
+                source_type = result.get("source_type", "web")
 
+                # PDF chunk URLs (pdf://filename#pageN) never resolve to a
+                # real HTTP page, and score_url() correctly never scores
+                # them >=90 (no TIER_1/TIER_2 domain match), so they never
+                # become full-content fetch targets — no special-casing
+                # needed here.
                 if len(fetch_targets) < MAX_FULL_FETCHES and score_url(url) >= 90:
                     fetch_targets[url] = next_id
 
@@ -145,6 +173,7 @@ class SupervisorAgent(Agent):
                     "url": url,
                     "title": result.get("title", url),
                     "snippet": snippet,
+                    "source_type": source_type,
                 }
                 next_id += 1
 
@@ -156,6 +185,7 @@ class SupervisorAgent(Agent):
         # --- Pass 3: splice enrichment back into snippets, preserving order ---
         full_fetch_count = 0
         enriched_count = 0
+        pdf_sources_count = 0
         for src_id, fields in pending.items():
             url = fields["url"]
             snippet = fields["snippet"]
@@ -165,11 +195,14 @@ class SupervisorAgent(Agent):
                 if enriched and len(enriched) > len(snippet):
                     snippet = snippet + "\n\n[Full content]:\n" + enriched[:1500]
                     enriched_count += 1
+            if fields["source_type"] == "pdf":
+                pdf_sources_count += 1
             sources[src_id] = Source(
                 id=src_id,
                 url=url,
                 title=fields["title"],
                 snippet=snippet[:3000],
+                source_type=fields["source_type"],
             )
 
         sorted_sources = dict(
@@ -186,12 +219,22 @@ class SupervisorAgent(Agent):
                 f"Full-content fetch: {len(fetch_targets)} urls, "
                 f"{enriched_count} enriched, {fetch_elapsed_ms}ms"
             )
+        # Milestone 2: only emitted when PDFs actually contributed —
+        # when no PDFs are uploaded, pdf_chunks_retrieved is always 0 and
+        # this log list (and therefore the SSE progress stream) is
+        # byte-for-byte identical to before this milestone.
+        if pdf_chunks_retrieved:
+            log_entries.append(
+                f"PDF search: {pdf_chunks_retrieved} chunks retrieved, "
+                f"{pdf_sources_count} added as sources"
+            )
         log_entries.append(f"Round {state['round']+1}: gathered {len(sorted_sources)} sources")
 
         logger.info(
             f"Search round {state['round']+1}: {len(sorted_sources)} sources "
             f"(intent: {intent}, full-fetch attempted: {full_fetch_count}, "
-            f"enriched: {enriched_count}, fetch phase: {fetch_elapsed_ms}ms)"
+            f"enriched: {enriched_count}, fetch phase: {fetch_elapsed_ms}ms, "
+            f"pdf_chunks_retrieved: {pdf_chunks_retrieved}, pdf_sources: {pdf_sources_count})"
         )
         return {
             "sources": sorted_sources,

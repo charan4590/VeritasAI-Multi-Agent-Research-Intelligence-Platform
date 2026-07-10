@@ -12,6 +12,7 @@ from .base import Agent
 from .intent import _detect_research_intent, ACADEMIC_SIGNALS, TECHNICAL_SIGNALS
 from .planner import PlannerAgent, parse_json
 from .search import WebResearchAgent, AcademicSearchAgent
+from .pdf_agent import PDFAgent
 from .supervisor import SupervisorAgent
 from .rag_agent import RAGAgent
 from .report_generator import ReportGeneratorAgent
@@ -21,7 +22,7 @@ __all__ = [
     "Agent",
     "_detect_research_intent", "ACADEMIC_SIGNALS", "TECHNICAL_SIGNALS",
     "PlannerAgent", "parse_json",
-    "WebResearchAgent", "AcademicSearchAgent",
+    "WebResearchAgent", "AcademicSearchAgent", "PDFAgent",
     "SupervisorAgent",
     "RAGAgent",
     "ReportGeneratorAgent",

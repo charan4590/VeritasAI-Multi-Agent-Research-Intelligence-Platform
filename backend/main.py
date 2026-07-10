@@ -179,6 +179,12 @@ async def _run_research_stream(question: str, max_rounds: int) -> AsyncIterator[
                     "snippet": latest_sources[i]["snippet"],
                     "credibility": score_url(latest_sources[i]["url"]),
                     "credibility_label": score_label(score_url(latest_sources[i]["url"])),
+                    # Phase 3 Milestone 2: additive field ("web" for any
+                    # source predating this milestone or any non-PDF
+                    # source) — existing consumers of this payload ignore
+                    # unknown keys, so this doesn't change response shape
+                    # for anyone not looking for it.
+                    "source_type": latest_sources[i].get("source_type", "web"),
                 }
                 for i in used if i in latest_sources
             }

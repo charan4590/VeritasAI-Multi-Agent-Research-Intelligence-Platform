@@ -5,3 +5,5 @@ venv/
 .venv/
 data/cache/
 data/*.db
+*.db
+!tests/**/*.db

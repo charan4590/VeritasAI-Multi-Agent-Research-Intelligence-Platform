@@ -98,6 +98,16 @@ class ReportGeneratorAgent(Agent):
         retrieved = state.get("retrieved_chunks", [])
         intent = _detect_research_intent(state["question"])
 
+        def _label(s) -> str:
+            # Milestone 2: visually distinguishes uploaded-document
+            # sources from web sources in the prompt itself, so the model
+            # can naturally write "per the uploaded document [n]" when
+            # appropriate. Only touches the raw/fallback source listing
+            # below — format_retrieved_context() (rag.py) is untouched,
+            # so the RAG-retrieved-chunk section of the prompt is exactly
+            # as before this milestone.
+            return "[PDF] " if s.get("source_type", "web") == "pdf" else ""
+
         if retrieved:
             rag_context = format_retrieved_context(retrieved)
             sorted_src = sorted(
@@ -107,7 +117,7 @@ class ReportGeneratorAgent(Agent):
             )
             max_raw = 10 if intent == "academic" else 5
             raw_context = "\n\n".join(
-                f"[{s['id']}] {s['title']}\n{s['url']}\n{s['snippet'][:600]}"
+                f"[{s['id']}] {_label(s)}{s['title']}\n{s['url']}\n{s['snippet'][:600]}"
                 for s in sorted_src[:max_raw]
             )
             context_block = (
@@ -123,7 +133,7 @@ class ReportGeneratorAgent(Agent):
                 reverse=True
             )
             context_block = "\n\n".join(
-                f"[{s['id']}] {s['title']}\n{s['url']}\n{s['snippet']}"
+                f"[{s['id']}] {_label(s)}{s['title']}\n{s['url']}\n{s['snippet']}"
                 for s in sorted_src
             )
             cite_note = "Cite claims using [n] markers from the source ids."

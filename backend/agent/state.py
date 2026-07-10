@@ -20,6 +20,13 @@ class Source(TypedDict):
     url: str
     title: str
     snippet: str
+    # Phase 3 Milestone 2: "web" (default, set by SupervisorAgent) or
+    # "pdf" (uploaded document, via PDFAgent) — lets CitationAgent and
+    # ReportGeneratorAgent clearly label uploaded-document sources
+    # separately from web sources. Read defensively via .get(..., "web")
+    # everywhere, so this is backward compatible with any Source dict
+    # that predates this field.
+    source_type: str
 
 
 class SearchPlan(TypedDict):
