@@ -17,6 +17,7 @@ from .supervisor import SupervisorAgent
 from .rag_agent import RAGAgent
 from .report_generator import ReportGeneratorAgent
 from .citation import CitationAgent
+from .fact_verification import FactVerificationAgent
 
 __all__ = [
     "Agent",
@@ -27,4 +28,5 @@ __all__ = [
     "RAGAgent",
     "ReportGeneratorAgent",
     "CitationAgent",
+    "FactVerificationAgent",
 ]

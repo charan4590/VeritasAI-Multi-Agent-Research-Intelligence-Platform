@@ -160,8 +160,15 @@ async def _run_research_stream(question: str, max_rounds: int) -> AsyncIterator[
                         last_log = len(log)
                     if "sources" in partial:
                         latest_sources = partial["sources"]
-                    if node == "validate":
-                        final_state = partial
+                    # Phase 3 Milestone 3: fact_verify is now the graph's
+                    # actual last node, running after validate. Merging
+                    # (not overwriting) means this doesn't need to know
+                    # the full field list either node returns — validate's
+                    # report/citations_used and fact_verify's
+                    # citation_verification/citation_confidence end up
+                    # in the same dict either way.
+                    if node in ("validate", "fact_verify"):
+                        final_state = {**(final_state or {}), **partial}
 
             if not final_state:
                 queue.put_nowait(sse({"type": "error", "message": "Agent finished without a report."}))
@@ -219,6 +226,9 @@ async def _run_research_stream(question: str, max_rounds: int) -> AsyncIterator[
                 eval_scores=eval_scores,
                 rag_chunks_used=rag_chunks,
                 latency_ms=latency_ms,
+                # Phase 3 Milestone 3
+                citation_verification=final_state.get("citation_verification", []),
+                citation_confidence=final_state.get("citation_confidence"),
             )
 
             store_memory(session_id=session_id, question=question,
@@ -237,6 +247,11 @@ async def _run_research_stream(question: str, max_rounds: int) -> AsyncIterator[
                 "rag_chunks": rag_chunks,
                 "latency_ms": latency_ms,
                 "session_id": session_id,
+                # Phase 3 Milestone 3: [] / None when verification found
+                # nothing to check or fell back gracefully — always
+                # present so the frontend never needs an `in` check.
+                "citation_verification": final_state.get("citation_verification", []),
+                "citation_confidence": final_state.get("citation_confidence"),
             }))
 
         except StreamAborted:

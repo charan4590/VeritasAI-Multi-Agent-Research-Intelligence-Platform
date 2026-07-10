@@ -65,3 +65,11 @@ class AgentState(TypedDict):
     # request in main.py, None in any test that builds state directly.
     tracker: Optional[Any]
     tracer: Optional[Any]
+    # Phase 3 Milestone 3: Fact Verification
+    # citation_verification: one record per (sentence, citation_id) claim
+    # checked — [] if verification hasn't run yet, found nothing to check,
+    # or failed and fell back gracefully (see FactVerificationAgent).
+    # citation_confidence: aggregate 0-100 score, or None if unavailable
+    # for any of the same reasons.
+    citation_verification: List[Dict[str, Any]]
+    citation_confidence: Optional[int]

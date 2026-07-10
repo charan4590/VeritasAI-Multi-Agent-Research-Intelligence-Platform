@@ -114,6 +114,13 @@ header h1{font-family:var(--font-d);font-size:22px;margin-right:auto;}
 #confidenceBar .track{height:8px;background:var(--rule);border-radius:999px;overflow:hidden;}
 #confidenceBar .fill{height:100%;border-radius:999px;transition:width .6s ease;background:var(--green);}
 #confidenceBar .score{font-family:var(--font-m);font-size:13px;color:var(--ink);margin-top:6px;}
+/* Phase 3 Milestone 3: Fact Verification */
+#citationConfidence{margin:0 0 16px;padding:10px 14px;background:var(--raised);border:1px solid var(--rule);border-radius:8px;font-family:var(--font-m);font-size:12px;color:var(--soft);}
+.verify-icon{display:inline-block;font-size:10px;font-weight:700;margin-left:2px;}
+.verify-supported{color:var(--green);}
+.verify-partial{color:var(--amber);}
+.verify-unsupported{color:var(--red);}
+.verify-unknown{color:var(--soft);}
 
 /* FOLLOW-UPS */
 #followUps{margin:16px 0;}
@@ -238,6 +245,7 @@ header h1{font-family:var(--font-d);font-size:22px;margin-right:auto;}
           <div class="track"><div class="fill" id="confFill" style="width:0%"></div></div>
           <div class="score" id="confScore"></div>
         </div>
+        <div id="citationConfidence" style="display:none"></div>
         <div id="reportWrap"><p class="placeholder-text">Ask a question above to start gathering evidence.</p></div>
         <div id="followUps" style="display:none">
           <div class="fu-label">Follow-up questions</div>
@@ -273,6 +281,9 @@ let activeHistoryId = null;
 // Milestone 1: Real Token Streaming — live synthesis buffer + rAF-throttled render
 let streamBuffer = '';
 let streamRenderQueued = false;
+
+// Phase 3 Milestone 3: Fact Verification — citation_id (string) -> verdict record
+let citationVerification = {};
 
 // ---- Init ----
 async function init() {
@@ -369,12 +380,14 @@ function startResearch() {
   startTime = Date.now();
   activeHistoryId = null;
   streamBuffer = '';
+  citationVerification = {};
 
   document.getElementById('log').innerHTML = '';
 
   document.getElementById('reportWrap').innerHTML = '<p class="placeholder-text">Working on it…</p>';
   document.getElementById('reportActions').style.display = 'none';
   document.getElementById('confidenceBar').style.display = 'none';
+  document.getElementById('citationConfidence').style.display = 'none';
   document.getElementById('followUps').style.display = 'none';
   document.getElementById('submitBtn').disabled = true;
   setStatus('planning', 'active');
@@ -412,8 +425,10 @@ function startResearch() {
     if (data.type === 'done') {
       streamBuffer = '';
       sources = data.sources || {};
+      citationVerification = buildCitationVerificationMap(data.citation_verification);
       renderReport(data.report);
       showConfidence(data.confidence || 0);
+      showCitationConfidence(data.citation_confidence, (data.citation_verification || []).length);
       showFollowUps(data.follow_ups || []);
       document.getElementById('reportActions').style.display = 'flex';
       setStatus('done', 'done');
@@ -444,11 +459,13 @@ function startResearch() {
 
 function newResearch() {
   streamBuffer = '';
+  citationVerification = {};
   document.getElementById('questionInput').value = '';
   document.getElementById('questionInput').focus();
   document.getElementById('reportWrap').innerHTML = '<p class="placeholder-text">Ask a question above to start gathering evidence.</p>';
   document.getElementById('reportActions').style.display = 'none';
   document.getElementById('confidenceBar').style.display = 'none';
+  document.getElementById('citationConfidence').style.display = 'none';
   document.getElementById('followUps').style.display = 'none';
   document.getElementById('log').innerHTML = '';
 
@@ -502,7 +519,7 @@ function renderReport(md) {
     const shortTitle = s ? getShortTitle(s.title) : '';
     const credColor = s ? getCredColor(s.credibility_label) : '';
     return `<button type="button" class="cite" style="${credColor}" onclick="openSource(${n})">
-      <span class="cite-num">${n}</span>${shortTitle ? `<span class="cite-title">${escHtml(shortTitle)}</span>` : ''}
+      <span class="cite-num">${n}</span>${getVerifyIcon(n)}${shortTitle ? `<span class="cite-title">${escHtml(shortTitle)}</span>` : ''}
     </button>`;
   });
   document.getElementById('reportWrap').innerHTML = marked.parse(withBadges);
@@ -533,6 +550,49 @@ function getCredColor(label) {
     Low: 'border-color:var(--soft);background:var(--paper);color:var(--soft)',
   };
   return colors[label] || colors.Good;
+}
+
+// ---- Fact Verification (Phase 3 Milestone 3) ----
+// A citation id can appear in multiple claims (cited by more than one
+// sentence); when that happens we surface the WORST verdict for that
+// citation's badge, since that's the one worth a reader's attention.
+const VERDICT_SEVERITY = { unsupported: 0, cannot_determine: 1, partially_supported: 2, supported: 3 };
+const VERDICT_ICONS = {
+  supported: { icon: '✓', cls: 'verify-supported', title: 'Supported by source' },
+  partially_supported: { icon: '~', cls: 'verify-partial', title: 'Partially supported by source' },
+  unsupported: { icon: '✗', cls: 'verify-unsupported', title: 'Not supported by source' },
+  cannot_determine: { icon: '?', cls: 'verify-unknown', title: 'Could not verify against source' },
+};
+
+function buildCitationVerificationMap(list) {
+  const map = {};
+  (list || []).forEach(v => {
+    const id = String(v.citation_id);
+    const existing = map[id];
+    if (!existing || VERDICT_SEVERITY[v.verdict] < VERDICT_SEVERITY[existing.verdict]) {
+      map[id] = v;
+    }
+  });
+  return map;
+}
+
+function getVerifyIcon(id) {
+  const v = citationVerification[String(id)];
+  if (!v) return '';
+  const meta = VERDICT_ICONS[v.verdict];
+  if (!meta) return '';
+  return `<span class="verify-icon ${meta.cls}" title="${meta.title} (${v.confidence}% confidence)">${meta.icon}</span>`;
+}
+
+function showCitationConfidence(score, checkedCount) {
+  const el = document.getElementById('citationConfidence');
+  if (score === null || score === undefined) {
+    el.style.display = 'none';
+    return;
+  }
+  el.style.display = 'block';
+  const label = score >= 80 ? 'High' : score >= 60 ? 'Good' : score >= 40 ? 'Medium' : 'Low';
+  el.textContent = `Citation verification: ${score}/100 — ${label} (${checkedCount} claim${checkedCount === 1 ? '' : 's'} checked)`;
 }
 
 // ---- Confidence (Feature 7) ----
@@ -616,9 +676,11 @@ async function loadSession(id) {
     const res = await fetch(`/api/history/${id}`, {headers: authHeaders()});
     const row = await res.json();
     sources = row.sources || {};
+    citationVerification = buildCitationVerificationMap(row.citation_verification);
     document.getElementById('questionInput').value = row.question;
     renderReport(row.report);
     showConfidence(row.confidence || 0);
+    showCitationConfidence(row.citation_confidence, (row.citation_verification || []).length);
     showFollowUps(row.follow_ups || []);
     document.getElementById('reportActions').style.display = 'flex';
     document.getElementById('log').innerHTML = '<p class="log-placeholder">Loaded from history</p>';

@@ -53,6 +53,10 @@ CACHE_ENABLED = os.environ.get("CACHE_ENABLED", "true").lower() == "true"
 SEARCH_CACHE_TTL = int(os.environ.get("SEARCH_CACHE_TTL", "1800"))
 FETCH_CACHE_TTL = int(os.environ.get("FETCH_CACHE_TTL", "86400"))
 EMBED_CACHE_TTL = int(os.environ.get("EMBED_CACHE_TTL", "604800"))
+# Phase 3 Milestone 3: (claim sentence, source text) -> verdict is a
+# near-deterministic judgment (same inputs, same LLM, same question asked)
+# so it gets a long TTL, same as embeddings.
+VERIFICATION_CACHE_TTL = int(os.environ.get("VERIFICATION_CACHE_TTL", "604800"))
 
 # Sentinel distinguishing "key not present / expired" from "cached value is
 # legitimately None or falsy" — a plain `None` return can't tell those apart.
@@ -272,6 +276,7 @@ _TTLS = {
     "search": SEARCH_CACHE_TTL,
     "fetch": FETCH_CACHE_TTL,
     "embed": EMBED_CACHE_TTL,
+    "verification": VERIFICATION_CACHE_TTL,
 }
 
 
@@ -296,10 +301,17 @@ def get_embed_cache() -> Cache:
     return _get_or_create("embed")
 
 
+def get_verification_cache() -> Cache:
+    return _get_or_create("verification")
+
+
 def get_all_cache_stats() -> List[Dict[str, Any]]:
     """Aggregate hit/miss metrics across all active caches. No route
     currently exposes this over HTTP (out of scope for this milestone —
     tools.py/rag.py/graph.py only) but it's here so a future
     /api/cache/stats endpoint, or a test/benchmark script, can call it
     directly."""
-    return [get_search_cache().stats(), get_fetch_cache().stats(), get_embed_cache().stats()]
+    return [
+        get_search_cache().stats(), get_fetch_cache().stats(),
+        get_embed_cache().stats(), get_verification_cache().stats(),
+    ]
