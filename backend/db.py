@@ -1,6 +1,7 @@
 """
-Database layer — updated for Phase 3 (evaluation scores, fact verification,
-risk analysis) and Phase 2 (observability).
+Database layer — updated for Phase 5 (grounded generation), Phase 3
+(evaluation scores, fact verification, risk analysis), and Phase 2
+(observability).
 """
 
 import json
@@ -65,6 +66,12 @@ def init_db():
                 evidence_gaps TEXT DEFAULT '[]',
                 conflicting_claims TEXT DEFAULT '[]',
                 recommended_follow_up_questions TEXT DEFAULT '[]',
+                -- Phase 5: Grounded Report Generation / Self-Correcting Verification
+                report_type TEXT DEFAULT NULL,
+                claims_removed TEXT DEFAULT '[]',
+                claims_rewritten TEXT DEFAULT '[]',
+                unsupported_claims TEXT DEFAULT '[]',
+                final_grounding_score INTEGER DEFAULT NULL,
                 created_at TEXT DEFAULT (datetime('now'))
             )
         """)
@@ -78,6 +85,11 @@ def init_db():
         _ensure_column(conn, "history", "evidence_gaps", "TEXT DEFAULT '[]'")
         _ensure_column(conn, "history", "conflicting_claims", "TEXT DEFAULT '[]'")
         _ensure_column(conn, "history", "recommended_follow_up_questions", "TEXT DEFAULT '[]'")
+        _ensure_column(conn, "history", "report_type", "TEXT DEFAULT NULL")
+        _ensure_column(conn, "history", "claims_removed", "TEXT DEFAULT '[]'")
+        _ensure_column(conn, "history", "claims_rewritten", "TEXT DEFAULT '[]'")
+        _ensure_column(conn, "history", "unsupported_claims", "TEXT DEFAULT '[]'")
+        _ensure_column(conn, "history", "final_grounding_score", "INTEGER DEFAULT NULL")
         conn.commit()
 
 
@@ -99,6 +111,11 @@ def save_session(
     evidence_gaps: Optional[List[str]] = None,
     conflicting_claims: Optional[List[str]] = None,
     recommended_follow_up_questions: Optional[List[str]] = None,
+    report_type: Optional[str] = None,
+    claims_removed: Optional[List[str]] = None,
+    claims_rewritten: Optional[List[str]] = None,
+    unsupported_claims: Optional[List[str]] = None,
+    final_grounding_score: Optional[int] = None,
 ) -> int:
     eval_scores = eval_scores or {}
     with get_conn() as conn:
@@ -111,8 +128,10 @@ def save_session(
                 rag_chunks_used, latency_ms,
                 citation_verification, citation_confidence,
                 risk_score, risk_level, identified_risks, evidence_gaps,
-                conflicting_claims, recommended_follow_up_questions
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                conflicting_claims, recommended_follow_up_questions,
+                report_type, claims_removed, claims_rewritten,
+                unsupported_claims, final_grounding_score
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 question,
@@ -138,6 +157,11 @@ def save_session(
                 json.dumps(evidence_gaps or []),
                 json.dumps(conflicting_claims or []),
                 json.dumps(recommended_follow_up_questions or []),
+                report_type,
+                json.dumps(claims_removed or []),
+                json.dumps(claims_rewritten or []),
+                json.dumps(unsupported_claims or []),
+                final_grounding_score,
             ),
         )
         conn.commit()
@@ -153,6 +177,9 @@ def _decode_row(d: Dict) -> Dict:
     d["evidence_gaps"] = json.loads(d.get("evidence_gaps") or "[]")
     d["conflicting_claims"] = json.loads(d.get("conflicting_claims") or "[]")
     d["recommended_follow_up_questions"] = json.loads(d.get("recommended_follow_up_questions") or "[]")
+    d["claims_removed"] = json.loads(d.get("claims_removed") or "[]")
+    d["claims_rewritten"] = json.loads(d.get("claims_rewritten") or "[]")
+    d["unsupported_claims"] = json.loads(d.get("unsupported_claims") or "[]")
     return d
 
 

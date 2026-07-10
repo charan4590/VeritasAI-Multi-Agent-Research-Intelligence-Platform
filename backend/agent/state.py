@@ -88,3 +88,17 @@ class AgentState(TypedDict):
     evidence_gaps: List[str]
     conflicting_claims: List[str]
     recommended_follow_up_questions: List[str]
+    # Phase 5: Grounded Report Generation / Self-Correcting Verification
+    # report_type: one of "Literature Review" / "Research Survey" /
+    # "Experimental Study" / "Comparative Analysis" / "General Research
+    # Answer" (or None if revision didn't run / fell back).
+    # claims_removed/claims_rewritten/unsupported_claims: the actual
+    # claim sentences, for transparency -- same "list of strings" style
+    # as identified_risks/evidence_gaps.
+    # final_grounding_score: 0-100, or None if unavailable (no citation
+    # verification data to grade against, or revision fell back).
+    report_type: Optional[str]
+    claims_removed: List[str]
+    claims_rewritten: List[str]
+    unsupported_claims: List[str]
+    final_grounding_score: Optional[int]

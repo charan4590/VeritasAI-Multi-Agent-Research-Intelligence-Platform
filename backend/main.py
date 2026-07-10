@@ -108,7 +108,7 @@ from db import delete_session, get_history, get_session, init_db, save_session
 # /api/version both read this instead of each hard-coding their own
 # (previously /api/health hard-coded "2.0.0" independently; that's the
 # kind of drift a single constant exists to prevent).
-APP_VERSION = "3.4.0"  # Phase 3 Milestone 4 (Risk Analysis Agent) complete
+APP_VERSION = "3.5.0"  # Phase 5 (Grounded Report Generation / RevisionAgent) complete
 
 
 class HealthResponse(BaseModel):
@@ -330,12 +330,14 @@ async def _run_research_stream(question: str, max_rounds: int) -> AsyncIterator[
                         last_log = len(log)
                     if "sources" in partial:
                         latest_sources = partial["sources"]
-                    # Phase 3 Milestone 4: risk_analyze joined fact_verify
-                    # as a terminal node after validate. Same merge
-                    # rationale as the Milestone 3 comment above — none of
-                    # these three nodes need to know each other's field
-                    # lists.
-                    if node in ("validate", "fact_verify", "risk_analyze"):
+                    # Phase 5: revise joined risk_analyze/fact_verify/
+                    # validate as a terminal node after validate. Same
+                    # merge rationale — and importantly, revise's
+                    # updated `report`/`citations_used` correctly
+                    # overwrite validate's pre-revision values here,
+                    # since dict-merge order means the last node's
+                    # partial wins for any field it also returns.
+                    if node in ("validate", "fact_verify", "risk_analyze", "revise"):
                         final_state = {**(final_state or {}), **partial}
 
             if not final_state:
@@ -416,6 +418,12 @@ async def _run_research_stream(question: str, max_rounds: int) -> AsyncIterator[
                 evidence_gaps=final_state.get("evidence_gaps", []),
                 conflicting_claims=final_state.get("conflicting_claims", []),
                 recommended_follow_up_questions=final_state.get("recommended_follow_up_questions", []),
+                # Phase 5
+                report_type=final_state.get("report_type"),
+                claims_removed=final_state.get("claims_removed", []),
+                claims_rewritten=final_state.get("claims_rewritten", []),
+                unsupported_claims=final_state.get("unsupported_claims", []),
+                final_grounding_score=final_state.get("final_grounding_score"),
             )
 
             store_memory(
@@ -454,6 +462,12 @@ async def _run_research_stream(question: str, max_rounds: int) -> AsyncIterator[
                         "recommended_follow_up_questions": final_state.get(
                             "recommended_follow_up_questions", []
                         ),
+                        # Phase 5: grounding summary, same "always present" contract.
+                        "report_type": final_state.get("report_type"),
+                        "claims_removed": final_state.get("claims_removed", []),
+                        "claims_rewritten": final_state.get("claims_rewritten", []),
+                        "unsupported_claims": final_state.get("unsupported_claims", []),
+                        "final_grounding_score": final_state.get("final_grounding_score"),
                     }
                 )
             )

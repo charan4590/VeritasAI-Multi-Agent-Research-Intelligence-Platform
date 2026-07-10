@@ -89,7 +89,7 @@ convention are already handled by the base class.
 ## 3. The pipeline, stage by stage
 
 ```
-planner → search → reflect → rag → synthesize → validate → fact_verify → risk_analyze → END
+planner → search → reflect → rag → synthesize → validate → fact_verify → risk_analyze → revise → END
              ▲__________________|
              (loop back to search while reflection says insufficient, capped at max_rounds)
 ```
@@ -268,6 +268,71 @@ opposite polarity of `evaluator.py`'s pre-existing `hallucination_risk_score`,
 where higher is better (despite its name, it's really a "citation health"
 score). Both coexist in the same report; this divergence is deliberate,
 documented in `risk_analysis.py`'s module docstring, not a bug.
+
+## 8.5. Grounded generation and self-correction (Phase 5)
+
+The graph's new final node: `revise` (`RevisionAgent`), running after
+`risk_analyze`. Where `risk_analyze` *measures* reliability, `revise`
+*acts* on it — removing or annotating claims fact verification already
+flagged, and pruning report sections the sources never actually
+supported in the first place.
+
+**This agent makes zero LLM calls**, deliberately. Every other
+enrichment agent needed an LLM for the one piece that's genuinely a
+natural-language task; revision doesn't have an equivalent, and having
+an LLM *rewrite* prose to fix hallucinations risks introducing new ones
+in the rewrite itself. Everything here is deterministic post-processing
+over data the pipeline already computed — measured at under 1ms even on
+a 50-sentence, 20-citation report, effectively free next to the
+seconds-scale LLM calls elsewhere in the pipeline.
+
+What it does, in order:
+1. **Claim-level revision** — using `citation_verification` (§7)
+   directly: a sentence where every citation is `unsupported` is
+   removed entirely; a sentence with a mix of verdicts keeps its
+   supported citations and strips only the unsupported ones (the same
+   surgical approach `CitationAgent` already uses for hallucinated ids);
+   `partially_supported` sentences are kept with an inline qualifier
+   annotation rather than deleted.
+2. **Strict grounding mode** (`STRICT_GROUNDING_MODE`, default on) — any
+   remaining numeric claim (a percentage, a decimal, an AUC value) gets
+   checked against its own citation's source text; a number that
+   doesn't appear verbatim gets an inline `[unverified]` marker. A
+   separate pass applies the same check to markdown table rows, since a
+   results table doesn't carry a per-row citation marker the way a
+   sentence does.
+3. **Report-type detection and section pruning** — this is the actual
+   fix for the motivating bug: `ReportGeneratorAgent`'s academic prompt
+   forces a rigid 9-section template (Introduction, Related Work,
+   *Proposed Method*, *Model Architecture*, *Dataset*, *Experimental
+   Results*, ...) regardless of whether the sources support any of the
+   experimental sections. `revise` detects report type — Comparative
+   Analysis / Research Survey / Literature Review from the question's
+   own language, or "Experimental Study" only if the sources
+   demonstrably contain methodology *and* metric signals (reusing
+   `reflection.ACADEMIC_REQUIRED_SIGNALS` unchanged) — and removes the
+   Proposed Method / Model Architecture / Dataset / Experimental Results
+   sections outright when the report type doesn't warrant them and the
+   question didn't explicitly ask for them. This is why a typical thin
+   search snippet (no metrics keywords) produces a report where an
+   entire fabricated results table is gone, not just flagged.
+4. **Footer rebuild** — `CitationAgent` already appended the Sources
+   footer *before* revision runs; since revision can remove citations
+   from the body, `revise` recomputes which ids still appear in the
+   revised body and rebuilds the footer from that set, so there are
+   never orphaned reference entries pointing at citations no longer used
+   anywhere in the text. Surviving citations keep their **original**
+   numbers — nothing is renumbered.
+5. **Grounding summary** — `report_type`, `claims_removed`,
+   `claims_rewritten`, `unsupported_claims` (all as literal claim text,
+   for transparency, matching `identified_risks`/`evidence_gaps`'s
+   existing style), and `final_grounding_score` (0–100: the fraction of
+   the original claim surface that's now cleanly grounded, with
+   `partially_supported`/annotated claims counted at half weight).
+
+Same failure contract as `fact_verification.py`/`risk_analysis.py`:
+`run()` never raises; any internal failure returns the report completely
+unchanged with empty grounding fields and a log line.
 
 ## 9. Caching
 

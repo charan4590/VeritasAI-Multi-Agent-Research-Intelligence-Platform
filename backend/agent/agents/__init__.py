@@ -16,6 +16,7 @@ from .pdf_agent import PDFAgent
 from .planner import PlannerAgent, parse_json
 from .rag_agent import RAGAgent
 from .report_generator import ReportGeneratorAgent
+from .revision import RevisionAgent
 from .risk_analysis import RiskAnalysisAgent
 from .search import AcademicSearchAgent, WebResearchAgent
 from .supervisor import SupervisorAgent
@@ -36,4 +37,5 @@ __all__ = [
     "CitationAgent",
     "FactVerificationAgent",
     "RiskAnalysisAgent",
+    "RevisionAgent",
 ]

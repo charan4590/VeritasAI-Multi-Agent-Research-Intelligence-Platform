@@ -139,6 +139,18 @@ header h1{font-family:var(--font-d);font-size:22px;margin-right:auto;}
 .ra-fu-btn{display:block;width:100%;text-align:left;padding:8px 12px;margin-bottom:4px;background:var(--paper);border:1px solid var(--rule);border-radius:6px;font-family:var(--font-b);font-size:12px;color:var(--ink);cursor:pointer;}
 .ra-fu-btn:hover{background:var(--blue-bg);border-color:var(--blue);}
 
+/* Phase 5: Grounded Report Generation */
+#grounding{margin:20px 0;padding:14px;background:var(--raised);border:1px solid var(--rule);border-radius:8px;}
+.gr-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
+.gr-label{font-family:var(--font-m);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--soft);}
+.gr-type-badge{font-family:var(--font-m);font-size:11px;font-weight:700;padding:2px 8px;border:1px solid var(--blue);border-radius:999px;color:var(--blue);background:var(--blue-bg);}
+.gr-score-text{font-family:var(--font-m);font-size:12px;color:var(--soft);margin:6px 0 10px;}
+.gr-stats{display:flex;gap:16px;margin-bottom:8px;flex-wrap:wrap;}
+.gr-stat{font-family:var(--font-m);font-size:12px;color:var(--ink);}
+.gr-stat b{color:var(--amber);}
+.gr-sublabel{font-family:var(--font-m);font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--soft);margin:10px 0 4px;}
+.gr-item{font-family:var(--font-b);font-size:12px;line-height:1.4;padding:6px 10px;margin-bottom:4px;border-radius:6px;border-left:3px solid var(--red);background:var(--red-bg);color:var(--soft);text-decoration:line-through;}
+
 /* FOLLOW-UPS */
 #followUps{margin:16px 0;}
 #followUps .fu-label{font-family:var(--font-m);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--soft);margin-bottom:8px;}
@@ -282,6 +294,15 @@ header h1{font-family:var(--font-d);font-size:22px;margin-right:auto;}
           <div id="raConflicts"></div>
           <div id="raFollowups"></div>
         </div>
+        <div id="grounding" style="display:none">
+          <div class="gr-header">
+            <span class="gr-label">Grounding</span>
+            <span class="gr-type-badge" id="grTypeBadge"></span>
+          </div>
+          <div class="gr-score-text" id="grScoreText"></div>
+          <div class="gr-stats" id="grStats"></div>
+          <div id="grRemoved"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -421,6 +442,7 @@ function startResearch() {
   document.getElementById('citationConfidence').style.display = 'none';
   document.getElementById('followUps').style.display = 'none';
   document.getElementById('riskAnalysis').style.display = 'none';
+  document.getElementById('grounding').style.display = 'none';
   document.getElementById('submitBtn').disabled = true;
   setStatus('planning', 'active');
 
@@ -463,6 +485,7 @@ function startResearch() {
       showCitationConfidence(data.citation_confidence, (data.citation_verification || []).length);
       showFollowUps(data.follow_ups || []);
       showRiskAnalysis(data);
+      showGrounding(data);
       document.getElementById('reportActions').style.display = 'flex';
       setStatus('done', 'done');
       document.getElementById('submitBtn').disabled = false;
@@ -501,6 +524,7 @@ function newResearch() {
   document.getElementById('citationConfidence').style.display = 'none';
   document.getElementById('followUps').style.display = 'none';
   document.getElementById('riskAnalysis').style.display = 'none';
+  document.getElementById('grounding').style.display = 'none';
   document.getElementById('log').innerHTML = '';
 
   setStatus('idle', '');
@@ -699,6 +723,34 @@ function showRiskAnalysis(data) {
   }
 }
 
+// ---- Grounding (Phase 5) ----
+function showGrounding(data) {
+  const el = document.getElementById('grounding');
+  const score = data.final_grounding_score;
+  if (score === null || score === undefined) {
+    el.style.display = 'none';
+    return;
+  }
+  el.style.display = 'block';
+
+  document.getElementById('grTypeBadge').textContent = data.report_type || 'General Research Answer';
+  document.getElementById('grScoreText').textContent = `Grounding score: ${score}/100 — report auto-corrected against verified evidence`;
+
+  const removed = data.claims_removed || [];
+  const rewritten = data.claims_rewritten || [];
+  document.getElementById('grStats').innerHTML =
+    `<span class="gr-stat"><b>${removed.length}</b> claim${removed.length === 1 ? '' : 's'} removed</span>` +
+    `<span class="gr-stat"><b>${rewritten.length}</b> claim${rewritten.length === 1 ? '' : 's'} annotated</span>`;
+
+  const removedContainer = document.getElementById('grRemoved');
+  if (removed.length) {
+    removedContainer.innerHTML = `<div class="gr-sublabel">Removed (unsupported by evidence)</div>` +
+      removed.map(t => `<div class="gr-item">${escHtml(t)}</div>`).join('');
+  } else {
+    removedContainer.innerHTML = '';
+  }
+}
+
 // ---- Source drawer (Feature 4) ----
 function openSource(id) {
   const s = sources[id] || sources[String(id)];
@@ -761,6 +813,7 @@ async function loadSession(id) {
     showCitationConfidence(row.citation_confidence, (row.citation_verification || []).length);
     showFollowUps(row.follow_ups || []);
     showRiskAnalysis(row);
+    showGrounding(row);
     document.getElementById('reportActions').style.display = 'flex';
     document.getElementById('log').innerHTML = '<p class="log-placeholder">Loaded from history</p>';
     setStatus('done', 'done');
