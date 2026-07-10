@@ -8,9 +8,10 @@ whole agent run. A circuit breaker remembers recent failures for a
 provider and skips it for a cooldown window rather than retrying a
 known-dead service on every single call.
 """
+
+import logging
 import os
 import time
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,7 @@ def _trip_circuit(provider: str):
 
 def _build_groq(temperature: float):
     from langchain_groq import ChatGroq
+
     api_key = os.environ.get("GROQ_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("GROQ_API_KEY not set")
@@ -42,6 +44,7 @@ def _build_groq(temperature: float):
 
 def _build_ollama(temperature: float):
     from langchain_ollama import ChatOllama
+
     model = os.environ.get("OLLAMA_MODEL", "llama3.2")
     return ChatOllama(
         model=model,

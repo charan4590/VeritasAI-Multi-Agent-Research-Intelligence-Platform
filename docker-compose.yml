@@ -1,0 +1,70 @@
+# Docker Compose — local full-stack run.
+#
+# Quick start:
+#   cp backend/.env.example backend/.env   # fill in TAVILY_API_KEY + (GROQ_API_KEY or Ollama)
+#   docker compose up --build
+#   open http://localhost:8000
+#
+# Data persistence: the SQLite database (history, observability, eval
+# baselines), the disk cache (Milestone 3), and the Chroma vector index
+# (RAG + PDF ingestion) all live under /app/data inside the container,
+# which is a named volume below — survives `docker compose down` and
+# container rebuilds. Use `docker compose down -v` to actually wipe it.
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
+    image: research-agent:latest
+    ports:
+      - "${PORT:-8000}:8000"
+    env_file:
+      # Must exist -- copy backend/.env.example to backend/.env first and
+      # fill in at least TAVILY_API_KEY (required) and either GROQ_API_KEY
+      # or the optional `ollama` service below (see its comment).
+      - backend/.env
+    environment:
+      # Overrides backend/.env.example's relative defaults (which assume
+      # a `cd backend && uvicorn ...` local run) to point explicitly at
+      # the mounted volume below — avoids any ambiguity about cwd-relative
+      # paths inside the container.
+      DB_PATH: /app/data/research.db
+      CHROMA_PATH: /app/data/chroma_db
+      CACHE_DIR: /app/data/cache
+    volumes:
+      - research-data:/app/data
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 40s
+      retries: 3
+    restart: unless-stopped
+
+  # Optional: fully local LLM + embeddings, no external API keys needed
+  # for the model itself (TAVILY_API_KEY for search is still required).
+  # Not started by default.
+  #
+  #   docker compose --profile local-llm up --build
+  #   docker compose exec ollama ollama pull llama3.2
+  #   docker compose exec ollama ollama pull nomic-embed-text
+  #
+  # Then set in backend/.env:
+  #   OLLAMA_BASE_URL=http://ollama:11434
+  # ("localhost" would resolve to the app container itself, not this
+  # service — a common Docker networking gotcha worth calling out.)
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["local-llm"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+
+volumes:
+  research-data:
+  ollama-data:

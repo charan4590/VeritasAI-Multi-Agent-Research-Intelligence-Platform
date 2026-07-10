@@ -74,8 +74,7 @@ class Agent(ABC):
 
         node_cm = tracker.node(self.name) if tracker is not None else nullcontext()
         span_cm = (
-            tracer.span(self.name, inputs=self.trace_inputs(state))
-            if tracer is not None else nullcontext()
+            tracer.span(self.name, inputs=self.trace_inputs(state)) if tracer is not None else nullcontext()
         )
 
         with node_cm:

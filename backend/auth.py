@@ -15,14 +15,14 @@ Why bcrypt: MD5/SHA256 are too fast for passwords — GPUs can crack them.
 bcrypt is deliberately slow (cost factor 12 = ~300ms per hash).
 """
 
+import logging
 import os
 import sqlite3
-import logging
 from datetime import datetime, timedelta
-from typing import Optional, Dict
+from typing import Dict, Optional
 
 from fastapi import HTTPException, Security
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 
@@ -48,6 +48,7 @@ bearer_scheme = HTTPBearer(auto_error=False)
 # ---------------------------------------------------------------------------
 # DB helpers
 # ---------------------------------------------------------------------------
+
 
 def _conn():
     conn = sqlite3.connect(DB_PATH)
@@ -84,9 +85,7 @@ def _ensure_default_user():
                 ("admin", hashed),
             )
             conn.commit()
-            logger.warning(
-                "Created default user admin/%s — change this immediately!", default_pw
-            )
+            logger.warning("Created default user admin/%s — change this immediately!", default_pw)
 
 
 def get_user(username: str) -> Optional[Dict]:
@@ -117,6 +116,7 @@ def create_user(username: str, password: str) -> bool:
 # Token logic
 # ---------------------------------------------------------------------------
 
+
 def verify_password(plain: str, hashed: str) -> bool:
     return pwd_context.verify(plain, hashed)
 
@@ -146,6 +146,7 @@ def authenticate_user(username: str, password: str) -> Optional[Dict]:
 # ---------------------------------------------------------------------------
 # FastAPI dependency
 # ---------------------------------------------------------------------------
+
 
 async def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Security(bearer_scheme),

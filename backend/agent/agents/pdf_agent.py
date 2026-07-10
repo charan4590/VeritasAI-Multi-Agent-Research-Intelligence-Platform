@@ -17,13 +17,13 @@ performance-impact writeup in the Milestone 2 PR notes for the measured
 cost of that lookup.
 """
 
-import os
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List
 
-from ..state import AgentState
 from ..pdf_ingestion import search_pdfs
+from ..state import AgentState
 from .base import Agent
 
 logger = logging.getLogger(__name__)
@@ -44,7 +44,9 @@ class PDFAgent(Agent):
 
     name = "pdf_search"
 
-    def search(self, queries: List[str], top_k: int = PDF_CHUNKS_PER_QUERY) -> Dict[str, List[Dict[str, Any]]]:
+    def search(
+        self, queries: List[str], top_k: int = PDF_CHUNKS_PER_QUERY
+    ) -> Dict[str, List[Dict[str, Any]]]:
         """
         Concurrent per-query PDF search, same ThreadPoolExecutor pattern
         as web_search_batch/academic_web_search_batch in tools.py, for
@@ -55,10 +57,7 @@ class PDFAgent(Agent):
         if not queries:
             return results
         with ThreadPoolExecutor(max_workers=min(5, len(queries))) as executor:
-            future_map = {
-                executor.submit(search_pdfs, q, top_k): q
-                for q in queries
-            }
+            future_map = {executor.submit(search_pdfs, q, top_k): q for q in queries}
             for future in future_map:
                 q = future_map[future]
                 try:

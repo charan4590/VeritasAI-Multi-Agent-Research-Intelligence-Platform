@@ -9,17 +9,21 @@ Changes from previous version:
   C. web_search() unchanged API — existing callers need no changes
 """
 
+import logging
 import os
 import re
-import logging
+from typing import Any, Dict, List, Optional
+
 import requests
-from typing import List, Dict, Any, Optional
 from tenacity import (
-    retry, stop_after_attempt, wait_exponential,
-    retry_if_exception_type, before_sleep_log,
+    before_sleep_log,
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
 )
 
-from .cache import get_search_cache, get_fetch_cache
+from .cache import get_fetch_cache, get_search_cache
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +44,13 @@ ACADEMIC_DOMAINS = [
 
 # Domains worth fetching full content from (beyond Tavily snippet)
 FULL_CONTENT_DOMAINS = {
-    "arxiv.org", "ieee.org", "springer.com", "nature.com",
-    "sciencedirect.com", "acm.org", "pubmed.ncbi.nlm.nih.gov",
+    "arxiv.org",
+    "ieee.org",
+    "springer.com",
+    "nature.com",
+    "sciencedirect.com",
+    "acm.org",
+    "pubmed.ncbi.nlm.nih.gov",
     "semanticscholar.org",
 }
 
@@ -50,11 +59,10 @@ def _get_client():
     global _client
     if _client is None:
         from tavily import TavilyClient
+
         api_key = os.environ.get("TAVILY_API_KEY")
         if not api_key:
-            raise RuntimeError(
-                "TAVILY_API_KEY not set. Get a free key at https://tavily.com"
-            )
+            raise RuntimeError("TAVILY_API_KEY not set. Get a free key at https://tavily.com")
         _client = TavilyClient(api_key=api_key)
     return _client
 
@@ -125,7 +133,9 @@ def academic_web_search(query: str, max_results: int = 7) -> List[Dict[str, Any]
             all_results.append(r)
 
     # Pass 2: academic-targeted query
-    academic_query = f"{query} site:arxiv.org OR site:ieee.org OR site:springer.com OR site:pubmed.ncbi.nlm.nih.gov"
+    academic_query = (
+        f"{query} site:arxiv.org OR site:ieee.org OR site:springer.com OR site:pubmed.ncbi.nlm.nih.gov"
+    )
     academic = web_search(academic_query, max_results=max_results)
     for r in academic:
         url = r.get("url", "")
@@ -142,7 +152,7 @@ def academic_web_search(query: str, max_results: int = 7) -> List[Dict[str, Any]
         return 1
 
     all_results.sort(key=_sort_key)
-    return all_results[:max_results * 2]  # return more for academic queries
+    return all_results[: max_results * 2]  # return more for academic queries
 
 
 def academic_web_search_batch(queries: List[str], max_results: int = 4) -> Dict[str, List[Dict[str, Any]]]:
@@ -153,14 +163,12 @@ def academic_web_search_batch(queries: List[str], max_results: int = 4) -> Dict[
     instead of the sum of all of them.
     """
     from concurrent.futures import ThreadPoolExecutor
+
     results: Dict[str, List[Dict[str, Any]]] = {}
     if not queries:
         return results
     with ThreadPoolExecutor(max_workers=min(5, len(queries))) as executor:
-        future_map = {
-            executor.submit(academic_web_search, q, max_results): q
-            for q in queries
-        }
+        future_map = {executor.submit(academic_web_search, q, max_results): q for q in queries}
         for future in future_map:
             q = future_map[future]
             try:
@@ -174,14 +182,12 @@ def academic_web_search_batch(queries: List[str], max_results: int = 4) -> Dict[
 def web_search_batch(queries: List[str], max_results: int = 5) -> Dict[str, List[Dict[str, Any]]]:
     """Concurrent version of plain web_search for general/technical queries."""
     from concurrent.futures import ThreadPoolExecutor
+
     results: Dict[str, List[Dict[str, Any]]] = {}
     if not queries:
         return results
     with ThreadPoolExecutor(max_workers=min(5, len(queries))) as executor:
-        future_map = {
-            executor.submit(web_search, q, max_results): q
-            for q in queries
-        }
+        future_map = {executor.submit(web_search, q, max_results): q for q in queries}
         for future in future_map:
             q = future_map[future]
             try:
@@ -190,48 +196,6 @@ def web_search_batch(queries: List[str], max_results: int = 5) -> Dict[str, List
                 logger.error(f"[search] concurrent query failed: {q!r} — {exc}")
                 results[q] = []
     return results
-    """
-    Fetch fuller text content from a URL.
-    Used for high-credibility academic sources where Tavily's snippet
-    misses the methodology/results sections.
-
-    Returns extracted text or None if fetch fails.
-    Only fetches from known academic domains to avoid privacy/legal issues.
-    """
-    try:
-        from urllib.parse import urlparse
-        domain = urlparse(url).netloc.replace("www.", "")
-
-        # Only fetch from trusted academic domains
-        if not any(d in domain for d in FULL_CONTENT_DOMAINS):
-            return None
-
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Research Agent; Academic Use)",
-            "Accept": "text/html,application/xhtml+xml",
-        }
-        resp = requests.get(url, headers=headers, timeout=timeout)
-        resp.raise_for_status()
-
-        # Extract text — strip HTML tags, keep content
-        text = resp.text
-        # Remove script/style blocks
-        text = re.sub(r"<(script|style)[^>]*>.*?</\1>", "", text, flags=re.DOTALL | re.IGNORECASE)
-        # Remove HTML tags
-        text = re.sub(r"<[^>]+>", " ", text)
-        # Normalize whitespace
-        text = re.sub(r"\s+", " ", text).strip()
-
-        # Return meaningful content (skip if mostly navigation/boilerplate)
-        if len(text) < 500:
-            return None
-
-        # Return up to 3000 chars of main content
-        return text[:3000]
-
-    except Exception as exc:
-        logger.debug(f"[fetch] failed for {url}: {exc}")
-        return None
 
 
 def fetch_full_content(url: str, timeout: int = 8) -> Optional[str]:
@@ -259,6 +223,7 @@ def fetch_full_content(url: str, timeout: int = 8) -> Optional[str]:
 
     try:
         from urllib.parse import urlparse
+
         domain = urlparse(url).netloc.replace("www.", "")
 
         if not any(d in domain for d in FULL_CONTENT_DOMAINS):

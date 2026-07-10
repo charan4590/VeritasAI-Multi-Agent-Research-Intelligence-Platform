@@ -1,6 +1,8 @@
 """Unit tests for RAG chunking and utilities (no Ollama/ChromaDB required)."""
-import pytest
-import sys, os
+
+import sys
+import os
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from agent.rag import chunk_text, chunk_source, format_retrieved_context
@@ -46,8 +48,10 @@ class TestChunkSource:
 
     def test_source_with_snippet_returns_chunks(self):
         source = {
-            "id": 1, "url": "https://example.com",
-            "title": "Test Article", "snippet": "This is the content. " * 50
+            "id": 1,
+            "url": "https://example.com",
+            "title": "Test Article",
+            "snippet": "This is the content. " * 50,
         }
         result = chunk_source(source)
         assert len(result) >= 1
@@ -56,10 +60,7 @@ class TestChunkSource:
         assert all("chunk_id" in c for c in result)
 
     def test_chunk_ids_are_unique(self):
-        source = {
-            "id": 5, "url": "https://test.com",
-            "title": "Title", "snippet": "word " * 400
-        }
+        source = {"id": 5, "url": "https://test.com", "title": "Title", "snippet": "word " * 400}
         chunks = chunk_source(source)
         ids = [c["chunk_id"] for c in chunks]
         assert len(ids) == len(set(ids))
@@ -72,10 +73,20 @@ class TestFormatContext:
 
     def test_chunks_formatted_with_relevance(self):
         chunks = [
-            {"text": "AI is transforming industries.", "source_id": "1",
-             "url": "https://example.com", "title": "AI Article", "relevance": 0.92},
-            {"text": "Machine learning advances rapidly.", "source_id": "2",
-             "url": "https://other.com", "title": "ML News", "relevance": 0.78},
+            {
+                "text": "AI is transforming industries.",
+                "source_id": "1",
+                "url": "https://example.com",
+                "title": "AI Article",
+                "relevance": 0.92,
+            },
+            {
+                "text": "Machine learning advances rapidly.",
+                "source_id": "2",
+                "url": "https://other.com",
+                "title": "ML News",
+                "relevance": 0.78,
+            },
         ]
         result = format_retrieved_context(chunks)
         assert "0.92" in result

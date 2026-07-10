@@ -18,17 +18,15 @@ on the user's machine, zero API cost, zero latency variance.
 """
 
 import os
-import re
-import json
-import hashlib
+from typing import Dict, List, Optional
+
 import requests
-from typing import List, Dict, Optional, Tuple
 
 from .cache import get_embed_cache
 
 OLLAMA_BASE = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "nomic-embed-text")
-CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", "300"))   # tokens ≈ chars/4
+CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", "300"))  # tokens ≈ chars/4
 CHUNK_OVERLAP = int(os.environ.get("CHUNK_OVERLAP", "50"))
 TOP_K = int(os.environ.get("RAG_TOP_K", "8"))
 
@@ -41,6 +39,7 @@ def _get_chroma():
     global _chroma_client
     if _chroma_client is None:
         import chromadb
+
         db_path = os.environ.get("CHROMA_PATH", "./chroma_db")
         _chroma_client = chromadb.PersistentClient(path=db_path)
     return _chroma_client
@@ -61,6 +60,7 @@ def _get_collection(session_id: str):
 # ---------------------------------------------------------------------------
 # Embedding
 # ---------------------------------------------------------------------------
+
 
 def embed_text(text: str) -> Optional[List[float]]:
     """
@@ -111,6 +111,7 @@ def embed_texts(texts: List[str]) -> List[Optional[List[float]]]:
     if not texts:
         return []
     from concurrent.futures import ThreadPoolExecutor
+
     max_workers = min(8, len(texts))
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         return list(executor.map(embed_text, texts))
@@ -120,8 +121,8 @@ def embed_texts(texts: List[str]) -> List[Optional[List[float]]]:
 # Chunking
 # ---------------------------------------------------------------------------
 
-def chunk_text(text: str, chunk_size: int = CHUNK_SIZE,
-               overlap: int = CHUNK_OVERLAP) -> List[str]:
+
+def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> List[str]:
     """
     #5: Semantic-aware chunking.
     Previously split on raw word counts, which fragments sentences and
@@ -139,7 +140,7 @@ def chunk_text(text: str, chunk_size: int = CHUNK_SIZE,
 
     # Split into sentences using boundary-aware regex (handles abbreviations
     # reasonably well without needing a full NLP library)
-    sentences = _re.split(r'(?<=[.!?])\s+(?=[A-Z])', text.strip())
+    sentences = _re.split(r"(?<=[.!?])\s+(?=[A-Z])", text.strip())
     sentences = [s.strip() for s in sentences if s.strip()]
 
     if not sentences:
@@ -160,8 +161,18 @@ def chunk_text(text: str, chunk_size: int = CHUNK_SIZE,
                 current_chunk_sentences = []
                 current_word_count = 0
             words = sentence.split()
-            for i in range(0, len(words), chunk_size):
-                chunks.append(" ".join(words[i:i + chunk_size]))
+            # Bug fix (Phase 4, caught by adopting CI/pytest as a hard
+            # gate): this fallback previously stepped by chunk_size with
+            # no overlap at all, silently ignoring the `overlap` parameter
+            # for any text that arrives as one giant sentence (e.g. no
+            # punctuation, or a single pathologically long sentence) --
+            # inconsistent with the normal sentence-packing path just
+            # below, which does apply overlap. max(1, ...) guards against
+            # overlap >= chunk_size, which would otherwise make the step
+            # zero or negative and loop forever.
+            step = max(1, chunk_size - overlap)
+            for i in range(0, len(words), step):
+                chunks.append(" ".join(words[i : i + chunk_size]))
             continue
 
         if current_word_count + sentence_words > chunk_size and current_chunk_sentences:
@@ -198,20 +209,23 @@ def chunk_source(source: Dict) -> List[Dict]:
     chunks = chunk_text(text)
     result = []
     for i, chunk in enumerate(chunks):
-        result.append({
-            "chunk_id": f"{source['id']}_chunk_{i}",
-            "source_id": source["id"],
-            "url": source.get("url", ""),
-            "title": source.get("title", ""),
-            "text": chunk,
-            "chunk_index": i,
-        })
+        result.append(
+            {
+                "chunk_id": f"{source['id']}_chunk_{i}",
+                "source_id": source["id"],
+                "url": source.get("url", ""),
+                "title": source.get("title", ""),
+                "text": chunk,
+                "chunk_index": i,
+            }
+        )
     return result
 
 
 # ---------------------------------------------------------------------------
 # Indexing
 # ---------------------------------------------------------------------------
+
 
 def index_sources(sources: Dict, session_id: str) -> bool:
     """
@@ -238,9 +252,7 @@ def index_sources(sources: Dict, session_id: str) -> bool:
         embeddings = embed_texts(texts)
 
         # Filter out chunks where embedding failed
-        valid = [
-            (c, e) for c, e in zip(all_chunks, embeddings) if e is not None
-        ]
+        valid = [(c, e) for c, e in zip(all_chunks, embeddings) if e is not None]
         if not valid:
             return False
 
@@ -248,12 +260,15 @@ def index_sources(sources: Dict, session_id: str) -> bool:
             ids=[c["chunk_id"] for c, _ in valid],
             embeddings=[e for _, e in valid],
             documents=[c["text"] for c, _ in valid],
-            metadatas=[{
-                "source_id": str(c["source_id"]),
-                "url": c["url"],
-                "title": c["title"],
-                "chunk_index": c["chunk_index"],
-            } for c, _ in valid],
+            metadatas=[
+                {
+                    "source_id": str(c["source_id"]),
+                    "url": c["url"],
+                    "title": c["title"],
+                    "chunk_index": c["chunk_index"],
+                }
+                for c, _ in valid
+            ],
         )
         print(f"[rag] indexed {len(valid)} chunks for session {session_id}")
         return True
@@ -267,8 +282,8 @@ def index_sources(sources: Dict, session_id: str) -> bool:
 # Retrieval
 # ---------------------------------------------------------------------------
 
-def retrieve_relevant_chunks(question: str, session_id: str,
-                              top_k: int = TOP_K) -> List[Dict]:
+
+def retrieve_relevant_chunks(question: str, session_id: str, top_k: int = TOP_K) -> List[Dict]:
     """
     Semantic retrieval: embed the question and find the most relevant chunks.
     Returns a list of chunk dicts with text + source metadata.
@@ -296,13 +311,15 @@ def retrieve_relevant_chunks(question: str, session_id: str,
 
         for doc, meta, dist in zip(docs, metas, dists):
             relevance = round(1 - dist, 3)  # cosine: 1=identical, 0=orthogonal
-            chunks.append({
-                "text": doc,
-                "source_id": meta.get("source_id"),
-                "url": meta.get("url"),
-                "title": meta.get("title"),
-                "relevance": relevance,
-            })
+            chunks.append(
+                {
+                    "text": doc,
+                    "source_id": meta.get("source_id"),
+                    "url": meta.get("url"),
+                    "title": meta.get("title"),
+                    "relevance": relevance,
+                }
+            )
 
         # Sort by relevance descending
         chunks.sort(key=lambda x: x["relevance"], reverse=True)
@@ -331,9 +348,7 @@ def format_retrieved_context(chunks: List[Dict]) -> str:
             lines.append(f"\n### [{sid}] {seen_sources[sid]}")
             lines.append(f"URL: {chunk.get('url', '')}")
 
-        lines.append(
-            f"\n[relevance: {chunk['relevance']:.2f}] {chunk['text']}"
-        )
+        lines.append(f"\n[relevance: {chunk['relevance']:.2f}] {chunk['text']}")
 
     return "\n".join(lines)
 

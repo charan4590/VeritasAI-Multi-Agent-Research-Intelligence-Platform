@@ -19,12 +19,11 @@ on all platforms. For scanned PDFs you'd add OCR (pytesseract) but
 that's out of scope here.
 """
 
-import os
-import uuid
-import sqlite3
 import logging
-from typing import List, Dict, Optional
-from pathlib import Path
+import os
+import sqlite3
+import uuid
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +34,7 @@ PDF_COLLECTION = "pdf_docs"
 # ---------------------------------------------------------------------------
 # DB: doc metadata
 # ---------------------------------------------------------------------------
+
 
 def _conn():
     conn = sqlite3.connect(DB_PATH)
@@ -65,6 +65,7 @@ _init_docs_table()
 # PDF text extraction
 # ---------------------------------------------------------------------------
 
+
 def _extract_text_from_pdf(content: bytes) -> Optional[List[Dict]]:
     """
     Extract text per page using pypdf.
@@ -73,7 +74,9 @@ def _extract_text_from_pdf(content: bytes) -> Optional[List[Dict]]:
     """
     try:
         import io
+
         from pypdf import PdfReader
+
         reader = PdfReader(io.BytesIO(content))
         pages = []
         for i, page in enumerate(reader.pages):
@@ -93,12 +96,13 @@ def _extract_text_from_pdf(content: bytes) -> Optional[List[Dict]]:
 # Ingestion pipeline
 # ---------------------------------------------------------------------------
 
+
 def ingest_pdf(content: bytes, filename: str) -> Dict:
     """
     Full ingestion pipeline for a PDF file.
     Returns {"success": True, "doc_id": ..., "chunks": N}
     """
-    from .rag import chunk_text, embed_text, _get_chroma
+    from .rag import _get_chroma, chunk_text, embed_text
 
     doc_id = str(uuid.uuid4())[:12]
 
@@ -127,13 +131,15 @@ def ingest_pdf(content: bytes, filename: str) -> Dict:
             text_chunks = chunk_text(page["text"], chunk_size=250, overlap=40)
             for i, chunk_text_item in enumerate(text_chunks):
                 if chunk_text_item.strip():
-                    all_chunks.append({
-                        "chunk_id": f"{doc_id}_p{page['page']}_c{i}",
-                        "doc_id": doc_id,
-                        "filename": filename,
-                        "page": page["page"],
-                        "text": chunk_text_item,
-                    })
+                    all_chunks.append(
+                        {
+                            "chunk_id": f"{doc_id}_p{page['page']}_c{i}",
+                            "doc_id": doc_id,
+                            "filename": filename,
+                            "page": page["page"],
+                            "text": chunk_text_item,
+                        }
+                    )
 
         if not all_chunks:
             _update_doc_status(doc_id, "error", "No chunks produced")
@@ -150,7 +156,7 @@ def ingest_pdf(content: bytes, filename: str) -> Dict:
         # Process in batches of 10 to avoid memory issues
         batch_size = 10
         for i in range(0, len(all_chunks), batch_size):
-            batch = all_chunks[i:i + batch_size]
+            batch = all_chunks[i : i + batch_size]
             embeddings = [embed_text(c["text"]) for c in batch]
             valid = [(c, e) for c, e in zip(batch, embeddings) if e is not None]
 
@@ -159,21 +165,27 @@ def ingest_pdf(content: bytes, filename: str) -> Dict:
                     ids=[c["chunk_id"] for c, _ in valid],
                     embeddings=[e for _, e in valid],
                     documents=[c["text"] for c, _ in valid],
-                    metadatas=[{
-                        "doc_id": c["doc_id"],
-                        "filename": c["filename"],
-                        "page": str(c["page"]),
-                    } for c, _ in valid],
+                    metadatas=[
+                        {
+                            "doc_id": c["doc_id"],
+                            "filename": c["filename"],
+                            "page": str(c["page"]),
+                        }
+                        for c, _ in valid
+                    ],
                 )
                 embedded_count += len(valid)
 
         # Update metadata
         with _conn() as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 UPDATE ingested_docs
                 SET status='ready', page_count=?, chunk_count=?
                 WHERE id=?
-            """, (len(pages), embedded_count, doc_id))
+            """,
+                (len(pages), embedded_count, doc_id),
+            )
             conn.commit()
 
         logger.info(f"Ingested {filename}: {len(pages)} pages, {embedded_count} chunks")
@@ -204,6 +216,7 @@ def _update_doc_status(doc_id: str, status: str, error: Optional[str] = None):
 # Search ingested PDFs
 # ---------------------------------------------------------------------------
 
+
 def search_pdfs(query: str, top_k: int = 5) -> List[Dict]:
     """
     Semantic search across all ingested PDFs.
@@ -211,7 +224,7 @@ def search_pdfs(query: str, top_k: int = 5) -> List[Dict]:
     so they can be merged with Tavily results seamlessly.
     """
     try:
-        from .rag import embed_text, _get_chroma
+        from .rag import _get_chroma, embed_text
 
         client = _get_chroma()
         try:
@@ -240,13 +253,15 @@ def search_pdfs(query: str, top_k: int = 5) -> List[Dict]:
         for doc, meta, dist in zip(docs, metas, dists):
             relevance = round(1 - dist, 3)
             if relevance > 0.5:  # Only return relevant chunks
-                chunks.append({
-                    "url": f"pdf://{meta.get('filename', 'unknown')}#page{meta.get('page', '?')}",
-                    "title": f"{meta.get('filename', 'PDF')} (p.{meta.get('page', '?')})",
-                    "content": doc,
-                    "relevance": relevance,
-                    "source_type": "pdf",
-                })
+                chunks.append(
+                    {
+                        "url": f"pdf://{meta.get('filename', 'unknown')}#page{meta.get('page', '?')}",
+                        "title": f"{meta.get('filename', 'PDF')} (p.{meta.get('page', '?')})",
+                        "content": doc,
+                        "relevance": relevance,
+                        "source_type": "pdf",
+                    }
+                )
 
         return chunks
 
@@ -259,11 +274,10 @@ def search_pdfs(query: str, top_k: int = 5) -> List[Dict]:
 # Management
 # ---------------------------------------------------------------------------
 
+
 def list_ingested_docs() -> List[Dict]:
     with _conn() as conn:
-        rows = conn.execute(
-            "SELECT * FROM ingested_docs ORDER BY created_at DESC"
-        ).fetchall()
+        rows = conn.execute("SELECT * FROM ingested_docs ORDER BY created_at DESC").fetchall()
     return [dict(r) for r in rows]
 
 
@@ -271,6 +285,7 @@ def delete_doc(doc_id: str):
     """Remove doc from DB and ChromaDB."""
     try:
         from .rag import _get_chroma
+
         client = _get_chroma()
         try:
             collection = client.get_collection(PDF_COLLECTION)

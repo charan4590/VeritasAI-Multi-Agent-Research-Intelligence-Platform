@@ -2,13 +2,17 @@
 Unit tests for the evaluation framework.
 These tests are all heuristic (no LLM calls) so they run instantly.
 """
-import pytest
-import sys, os
+
+import sys
+import os
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from agent.evaluator import (
-    citation_score, source_diversity_score,
-    hallucination_risk_score, _grade,
+    citation_score,
+    source_diversity_score,
+    hallucination_risk_score,
+    _grade,
 )
 
 

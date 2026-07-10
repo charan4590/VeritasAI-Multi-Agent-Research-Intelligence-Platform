@@ -15,9 +15,11 @@ fresh in-memory cache backend per test for full isolation (same
 test-isolation bug this file's sibling already hit once, avoided here
 from the start).
 """
+
 import sys
 import os
 import json
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
@@ -25,7 +27,9 @@ import pytest
 from agent.graph import initial_state
 import agent.agents.risk_analysis as ra_mod
 from agent.agents.risk_analysis import (
-    RiskAnalysisAgent, _compute_risk_signals, _single_source_dominance,
+    RiskAnalysisAgent,
+    _compute_risk_signals,
+    _single_source_dominance,
     _citation_frequency,
 )
 
@@ -36,6 +40,7 @@ def _isolated_risk_cache(monkeypatch):
     rationale — forces a throwaway in-memory backend so cache state never
     leaks between tests via the shared on-disk diskcache directory."""
     import agent.cache as cache_mod
+
     monkeypatch.setattr(cache_mod, "_backend_singleton", cache_mod.InMemoryCacheBackend())
     monkeypatch.setattr(cache_mod, "_instances", {})
     yield
@@ -60,23 +65,38 @@ def _source(id, url, title, snippet):
     return {"id": id, "url": url, "title": title, "snippet": snippet, "source_type": "web"}
 
 
-def _make_state(question, sources, report, citations_used=None,
-                 citation_verification=None, retrieved_chunks=None):
+def _make_state(
+    question, sources, report, citations_used=None, citation_verification=None, retrieved_chunks=None
+):
     state = initial_state(question)
     state["sources"] = sources
     state["report"] = report
     state["citations_used"] = citations_used or list(sources.keys())
     state["citation_verification"] = citation_verification or []
-    state["retrieved_chunks"] = retrieved_chunks or [{"text": "x"}] * 5  # enough to avoid the "thin evidence" signal by default
+    state["retrieved_chunks"] = (
+        retrieved_chunks or [{"text": "x"}] * 5
+    )  # enough to avoid the "thin evidence" signal by default
     return state
 
 
 class TestContradictorySources:
     def test_contradiction_flagged_in_conflicting_claims(self):
         sources = {
-            1: _source(1, "https://siteone.example.com/a", "Study A", "The treatment is proven safe and effective for most patients."),
-            2: _source(2, "https://sitetwo.example.org/b", "Study B", "The treatment is dangerous and ineffective according to this analysis."),
-            3: _source(3, "https://sitethree.example.net/c", "Study C", "Further research supports these findings."),
+            1: _source(
+                1,
+                "https://siteone.example.com/a",
+                "Study A",
+                "The treatment is proven safe and effective for most patients.",
+            ),
+            2: _source(
+                2,
+                "https://sitetwo.example.org/b",
+                "Study B",
+                "The treatment is dangerous and ineffective according to this analysis.",
+            ),
+            3: _source(
+                3, "https://sitethree.example.net/c", "Study C", "Further research supports these findings."
+            ),
         }
         report = "Findings are mixed [1][2][3]."
         state = _make_state("is this treatment safe", sources, report)
@@ -88,9 +108,21 @@ class TestContradictorySources:
 
     def test_no_contradiction_no_flag(self):
         sources = {
-            1: _source(1, "https://siteone.example.com/a", "Study A", "The treatment shows consistent positive results."),
-            2: _source(2, "https://sitetwo.example.org/b", "Study B", "Follow-up analysis confirms the positive results."),
-            3: _source(3, "https://sitethree.example.net/c", "Study C", "A third study also confirms these results."),
+            1: _source(
+                1,
+                "https://siteone.example.com/a",
+                "Study A",
+                "The treatment shows consistent positive results.",
+            ),
+            2: _source(
+                2,
+                "https://sitetwo.example.org/b",
+                "Study B",
+                "Follow-up analysis confirms the positive results.",
+            ),
+            3: _source(
+                3, "https://sitethree.example.net/c", "Study C", "A third study also confirms these results."
+            ),
         }
         report = "Findings are consistent [1][2][3]."
         state = _make_state("is this treatment safe", sources, report)
@@ -108,7 +140,9 @@ class TestWeakEvidence:
             3: _source(3, "https://sitethree.example.net/c", "Study C", "A third finding."),
         }
         state = _make_state(
-            "test question", sources, "A claim [1].",
+            "test question",
+            sources,
+            "A claim [1].",
             retrieved_chunks=[{"text": "only one chunk"}],
         )
 
@@ -117,7 +151,10 @@ class TestWeakEvidence:
         assert any("retrieved" in g.lower() for g in signals["evidence_gaps"])
 
     def test_low_credibility_ratio_flagged_as_risk(self):
-        sources = {i: _source(i, f"https://randomblog{i}.example.com/post", f"Blog {i}", "content") for i in range(1, 6)}
+        sources = {
+            i: _source(i, f"https://randomblog{i}.example.com/post", f"Blog {i}", "content")
+            for i in range(1, 6)
+        }
         state = _make_state("test question", sources, "Claims [1][2][3][4][5].")
 
         signals = _compute_risk_signals(state)
@@ -175,12 +212,15 @@ class TestSingleSourceDominance:
             1: _source(1, "https://arxiv.org/abs/x", "Paper X", "Detailed findings."),
             2: _source(2, "https://arxiv.org/abs/y", "Paper Y", "Brief mention."),
         }
-        verification = (
-            [{"citation_id": 1, "verdict": "supported", "confidence": 90, "reasoning": "ok", "sentence": "s"}] * 4
-            + [{"citation_id": 2, "verdict": "supported", "confidence": 90, "reasoning": "ok", "sentence": "s"}]
-        )
+        verification = [
+            {"citation_id": 1, "verdict": "supported", "confidence": 90, "reasoning": "ok", "sentence": "s"}
+        ] * 4 + [
+            {"citation_id": 2, "verdict": "supported", "confidence": 90, "reasoning": "ok", "sentence": "s"}
+        ]
         state = _make_state(
-            "test question", sources, "Claims [1][2].",
+            "test question",
+            sources,
+            "Claims [1][2].",
             citation_verification=verification,
         )
         signals = _compute_risk_signals(state)
@@ -199,7 +239,10 @@ class TestCacheHits:
         fake = FakeLLM(["What does peer review say?", "Are there more recent studies?"])
         monkeypatch.setattr(ra_mod, "get_llm", lambda temperature=0.3: fake)
 
-        sources = {i: _source(i, f"https://randomblog{i}.example.com/post", f"Blog {i}", "content") for i in range(1, 6)}
+        sources = {
+            i: _source(i, f"https://randomblog{i}.example.com/post", f"Blog {i}", "content")
+            for i in range(1, 6)
+        }
         state1 = _make_state("test question", sources, "Claims [1][2][3][4][5].")
         result1 = RiskAnalysisAgent().run(state1)
         assert fake.call_count == 1
@@ -212,10 +255,14 @@ class TestCacheHits:
 
     def test_cache_stats_show_hit(self, monkeypatch):
         import agent.cache as cache_mod
+
         fake = FakeLLM(["Q1?", "Q2?"])
         monkeypatch.setattr(ra_mod, "get_llm", lambda temperature=0.3: fake)
 
-        sources = {i: _source(i, f"https://randomblog{i}.example.com/post", f"Blog {i}", "content") for i in range(1, 6)}
+        sources = {
+            i: _source(i, f"https://randomblog{i}.example.com/post", f"Blog {i}", "content")
+            for i in range(1, 6)
+        }
         state = _make_state("test question", sources, "Claims [1][2][3][4][5].")
         RiskAnalysisAgent().run(state)
         RiskAnalysisAgent().run(state)
@@ -241,7 +288,9 @@ class TestCacheHits:
             {"citation_id": 3, "verdict": "supported", "confidence": 90, "reasoning": "ok", "sentence": "s"},
         ]
         state = _make_state(
-            "test question", sources, "Claims [1][2][3].",
+            "test question",
+            sources,
+            "Claims [1][2][3].",
             citation_verification=verification,
             retrieved_chunks=[{"text": "x"}] * 5,
         )
@@ -254,9 +303,13 @@ class TestFallbackOnLLMError:
     def test_llm_exception_falls_back_to_templated_followups(self, monkeypatch):
         def broken_get_llm(temperature=0.3):
             raise RuntimeError("simulated LLM outage")
+
         monkeypatch.setattr(ra_mod, "get_llm", broken_get_llm)
 
-        sources = {i: _source(i, f"https://randomblog{i}.example.com/post", f"Blog {i}", "content") for i in range(1, 6)}
+        sources = {
+            i: _source(i, f"https://randomblog{i}.example.com/post", f"Blog {i}", "content")
+            for i in range(1, 6)
+        }
         state = _make_state("test question", sources, "Claims [1][2][3][4][5].")
 
         result = RiskAnalysisAgent().run(state)
@@ -274,9 +327,13 @@ class TestFallbackOnLLMError:
         class GarbageLLM:
             def invoke(self, messages):
                 return FakeResponse("not valid json")
+
         monkeypatch.setattr(ra_mod, "get_llm", lambda temperature=0.3: GarbageLLM())
 
-        sources = {i: _source(i, f"https://randomblog{i}.example.com/post", f"Blog {i}", "content") for i in range(1, 6)}
+        sources = {
+            i: _source(i, f"https://randomblog{i}.example.com/post", f"Blog {i}", "content")
+            for i in range(1, 6)
+        }
         state = _make_state("test question", sources, "Claims [1][2][3][4][5].")
 
         result = RiskAnalysisAgent().run(state)
@@ -287,6 +344,7 @@ class TestFallbackOnLLMError:
     def test_signal_computation_failure_falls_back_gracefully(self, monkeypatch):
         def broken_signals(state):
             raise RuntimeError("simulated bug in signal computation")
+
         monkeypatch.setattr(ra_mod, "_compute_risk_signals", broken_signals)
 
         sources = {1: _source(1, "https://arxiv.org/abs/x", "Paper X", "content")}
@@ -303,12 +361,14 @@ class TestFallbackOnLLMError:
 class TestObservabilityIntegration:
     def test_is_agent_subclass_with_name(self):
         from agent.agents.base import Agent
+
         agent = RiskAnalysisAgent()
         assert isinstance(agent, Agent)
         assert agent.name == "risk_analyze"
 
     def test_registered_in_graph(self):
         from agent.graph import build_graph
+
         g = build_graph()
         assert "risk_analyze" in g.nodes
 
@@ -316,6 +376,7 @@ class TestObservabilityIntegration:
 class TestRiskLevelThresholds:
     def test_level_labels_match_score_ranges(self):
         from agent.agents.risk_analysis import _risk_level
+
         assert _risk_level(0) == "Low"
         assert _risk_level(33) == "Low"
         assert _risk_level(34) == "Medium"

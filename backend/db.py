@@ -2,10 +2,11 @@
 Database layer — updated for Phase 3 (evaluation scores, fact verification,
 risk analysis) and Phase 2 (observability).
 """
-import sqlite3
+
 import json
 import os
-from typing import List, Dict, Optional
+import sqlite3
+from typing import Dict, List, Optional
 
 DB_PATH = os.environ.get("DB_PATH", "research.db")
 
@@ -101,7 +102,8 @@ def save_session(
 ) -> int:
     eval_scores = eval_scores or {}
     with get_conn() as conn:
-        cur = conn.execute("""
+        cur = conn.execute(
+            """
             INSERT INTO history (
                 question, report, sources, confidence, mode, follow_ups,
                 eval_overall, eval_relevance, eval_citations,
@@ -111,27 +113,33 @@ def save_session(
                 risk_score, risk_level, identified_risks, evidence_gaps,
                 conflicting_claims, recommended_follow_up_questions
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            question, report, json.dumps(sources), confidence, mode,
-            json.dumps(follow_ups),
-            eval_scores.get("overall_score"),
-            eval_scores.get("relevance_score"),
-            eval_scores.get("citation_score"),
-            eval_scores.get("diversity_score"),
-            eval_scores.get("hallucination_risk_score"),
-            eval_scores.get("grade"),
-            json.dumps(eval_scores),
-            rag_chunks_used,
-            latency_ms,
-            json.dumps(citation_verification or []),
-            citation_confidence,
-            risk_score,
-            risk_level,
-            json.dumps(identified_risks or []),
-            json.dumps(evidence_gaps or []),
-            json.dumps(conflicting_claims or []),
-            json.dumps(recommended_follow_up_questions or []),
-        ))
+        """,
+            (
+                question,
+                report,
+                json.dumps(sources),
+                confidence,
+                mode,
+                json.dumps(follow_ups),
+                eval_scores.get("overall_score"),
+                eval_scores.get("relevance_score"),
+                eval_scores.get("citation_score"),
+                eval_scores.get("diversity_score"),
+                eval_scores.get("hallucination_risk_score"),
+                eval_scores.get("grade"),
+                json.dumps(eval_scores),
+                rag_chunks_used,
+                latency_ms,
+                json.dumps(citation_verification or []),
+                citation_confidence,
+                risk_score,
+                risk_level,
+                json.dumps(identified_risks or []),
+                json.dumps(evidence_gaps or []),
+                json.dumps(conflicting_claims or []),
+                json.dumps(recommended_follow_up_questions or []),
+            ),
+        )
         conn.commit()
         return cur.lastrowid
 
@@ -150,17 +158,13 @@ def _decode_row(d: Dict) -> Dict:
 
 def get_history(limit: int = 50) -> List[Dict]:
     with get_conn() as conn:
-        rows = conn.execute(
-            "SELECT * FROM history ORDER BY created_at DESC LIMIT ?", (limit,)
-        ).fetchall()
+        rows = conn.execute("SELECT * FROM history ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
     return [_decode_row(dict(r)) for r in rows]
 
 
 def get_session(session_id: int) -> Optional[Dict]:
     with get_conn() as conn:
-        row = conn.execute(
-            "SELECT * FROM history WHERE id = ?", (session_id,)
-        ).fetchone()
+        row = conn.execute("SELECT * FROM history WHERE id = ?", (session_id,)).fetchone()
     if not row:
         return None
     return _decode_row(dict(row))

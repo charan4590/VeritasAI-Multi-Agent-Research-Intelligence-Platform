@@ -1,4 +1,4 @@
-from typing import TypedDict, Optional, List, Dict, Any
+from typing import Any, Dict, List, Optional, TypedDict
 
 
 class StreamAborted(Exception):
@@ -12,6 +12,7 @@ class StreamAborted(Exception):
     abort means the client is gone and no further LLM spend is justified —
     the run should stop immediately instead of falling back.
     """
+
     pass
 
 
@@ -35,6 +36,7 @@ class SearchPlan(TypedDict):
 
 class ReflectionDecision:
     """Structured reflection decision (plain class for Python 3.9 compat)."""
+
     def __init__(self, sufficient: bool, follow_up_queries: List[str], reasoning: str):
         self.sufficient = sufficient
         self.follow_up_queries = follow_up_queries

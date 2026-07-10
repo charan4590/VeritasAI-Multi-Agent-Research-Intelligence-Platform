@@ -29,7 +29,7 @@ Each agent exposes two things:
 from typing import Any, Dict, List
 
 from ..state import AgentState
-from ..tools import web_search_batch, academic_web_search_batch
+from ..tools import academic_web_search_batch, web_search_batch
 from .base import Agent
 
 

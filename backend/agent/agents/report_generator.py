@@ -9,11 +9,11 @@ from before this milestone.
 
 import logging
 
-from ..state import AgentState, StreamAborted
+from ..credibility import score_url
 from ..llm import get_llm
 from ..rag import format_retrieved_context
 from ..reflection import post_synthesis_check
-from ..credibility import score_url
+from ..state import AgentState, StreamAborted
 from .base import Agent
 from .intent import _detect_research_intent
 
@@ -111,9 +111,7 @@ class ReportGeneratorAgent(Agent):
         if retrieved:
             rag_context = format_retrieved_context(retrieved)
             sorted_src = sorted(
-                state["sources"].values(),
-                key=lambda s: score_url(s.get("url", "")),
-                reverse=True
+                state["sources"].values(), key=lambda s: score_url(s.get("url", "")), reverse=True
             )
             max_raw = 10 if intent == "academic" else 5
             raw_context = "\n\n".join(
@@ -128,13 +126,10 @@ class ReportGeneratorAgent(Agent):
             cite_note = "Cite with [source_id] numbers. Use semantically retrieved context as primary."
         else:
             sorted_src = sorted(
-                state["sources"].values(),
-                key=lambda s: score_url(s.get("url", "")),
-                reverse=True
+                state["sources"].values(), key=lambda s: score_url(s.get("url", "")), reverse=True
             )
             context_block = "\n\n".join(
-                f"[{s['id']}] {_label(s)}{s['title']}\n{s['url']}\n{s['snippet']}"
-                for s in sorted_src
+                f"[{s['id']}] {_label(s)}{s['title']}\n{s['url']}\n{s['snippet']}" for s in sorted_src
             )
             cite_note = "Cite claims using [n] markers from the source ids."
 
@@ -152,13 +147,17 @@ class ReportGeneratorAgent(Agent):
         full_text = ""
         if stream_callback:
             try:
-                for chunk in llm.stream([
-                    ("system", system_prompt),
-                    ("human",
-                     f"Research topic: {state['question']}\n\n"
-                     f"{context_block}\n\n"
-                     f"Write the full structured report now. Every section is required."),
-                ]):
+                for chunk in llm.stream(
+                    [
+                        ("system", system_prompt),
+                        (
+                            "human",
+                            f"Research topic: {state['question']}\n\n"
+                            f"{context_block}\n\n"
+                            f"Write the full structured report now. Every section is required.",
+                        ),
+                    ]
+                ):
                     token = getattr(chunk, "content", "") or ""
                     if token:
                         full_text += token
@@ -175,13 +174,17 @@ class ReportGeneratorAgent(Agent):
                 full_text = ""
 
         if not full_text:
-            response = llm.invoke([
-                ("system", system_prompt),
-                ("human",
-                 f"Research topic: {state['question']}\n\n"
-                 f"{context_block}\n\n"
-                 f"Write the full structured report now. Every section is required."),
-            ])
+            response = llm.invoke(
+                [
+                    ("system", system_prompt),
+                    (
+                        "human",
+                        f"Research topic: {state['question']}\n\n"
+                        f"{context_block}\n\n"
+                        f"Write the full structured report now. Every section is required.",
+                    ),
+                ]
+            )
             full_text = response.content
 
         # Post-synthesis reflection — verify report actually satisfies query

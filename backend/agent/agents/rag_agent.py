@@ -6,13 +6,13 @@ recall via rag.py's ChromaDB index, then cross-encoder re-rank via
 reranker.py) is byte-for-byte unchanged from before this milestone.
 """
 
+import logging
 import os
 import uuid
-import logging
 
-from ..state import AgentState
 from ..rag import index_sources, retrieve_relevant_chunks
-from ..reranker import rerank_chunks, is_reranker_available
+from ..reranker import is_reranker_available, rerank_chunks
+from ..state import AgentState
 from .base import Agent
 
 logger = logging.getLogger(__name__)
@@ -39,7 +39,9 @@ class RAGAgent(Agent):
 
         if success:
             candidates = retrieve_relevant_chunks(
-                state["question"], session_id, top_k=RETRIEVAL_CANDIDATES,
+                state["question"],
+                session_id,
+                top_k=RETRIEVAL_CANDIDATES,
             )
             log_entries.append(f"RAG: retrieved {len(candidates)} candidate chunks")
 

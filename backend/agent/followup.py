@@ -1,27 +1,31 @@
 """
 Generates follow-up question suggestions after a report is written.
 """
-import re
+
 import json
+import re
+
 from .llm import get_llm
 
 
 def generate_follow_ups(question: str, report: str) -> list:
     try:
         llm = get_llm(temperature=0.4)
-        response = llm.invoke([
-            (
-                "system",
-                "You suggest follow-up research questions. "
-                "Respond ONLY with a JSON array of exactly 3 short questions. "
-                'Example: ["What is X?", "How does Y work?", "Why did Z happen?"]'
-            ),
-            (
-                "human",
-                f"Original question: {question}\n\nReport summary (first 500 chars): "
-                f"{report[:500]}\n\nSuggest 3 follow-up questions."
-            ),
-        ])
+        response = llm.invoke(
+            [
+                (
+                    "system",
+                    "You suggest follow-up research questions. "
+                    "Respond ONLY with a JSON array of exactly 3 short questions. "
+                    'Example: ["What is X?", "How does Y work?", "Why did Z happen?"]',
+                ),
+                (
+                    "human",
+                    f"Original question: {question}\n\nReport summary (first 500 chars): "
+                    f"{report[:500]}\n\nSuggest 3 follow-up questions.",
+                ),
+            ]
+        )
         text = response.content.strip()
         # Try to extract JSON array
         match = re.search(r"\[[\s\S]*?\]", text)

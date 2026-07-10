@@ -9,22 +9,27 @@ there's no circular import.
 """
 
 from .base import Agent
-from .intent import _detect_research_intent, ACADEMIC_SIGNALS, TECHNICAL_SIGNALS
-from .planner import PlannerAgent, parse_json
-from .search import WebResearchAgent, AcademicSearchAgent
-from .pdf_agent import PDFAgent
-from .supervisor import SupervisorAgent
-from .rag_agent import RAGAgent
-from .report_generator import ReportGeneratorAgent
 from .citation import CitationAgent
 from .fact_verification import FactVerificationAgent
+from .intent import ACADEMIC_SIGNALS, TECHNICAL_SIGNALS, _detect_research_intent
+from .pdf_agent import PDFAgent
+from .planner import PlannerAgent, parse_json
+from .rag_agent import RAGAgent
+from .report_generator import ReportGeneratorAgent
 from .risk_analysis import RiskAnalysisAgent
+from .search import AcademicSearchAgent, WebResearchAgent
+from .supervisor import SupervisorAgent
 
 __all__ = [
     "Agent",
-    "_detect_research_intent", "ACADEMIC_SIGNALS", "TECHNICAL_SIGNALS",
-    "PlannerAgent", "parse_json",
-    "WebResearchAgent", "AcademicSearchAgent", "PDFAgent",
+    "_detect_research_intent",
+    "ACADEMIC_SIGNALS",
+    "TECHNICAL_SIGNALS",
+    "PlannerAgent",
+    "parse_json",
+    "WebResearchAgent",
+    "AcademicSearchAgent",
+    "PDFAgent",
     "SupervisorAgent",
     "RAGAgent",
     "ReportGeneratorAgent",

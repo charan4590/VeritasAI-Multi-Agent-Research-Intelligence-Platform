@@ -15,15 +15,15 @@ Why this matters in interviews:
 This is the difference between a demo project and a research project.
 """
 
-import time
-import json
-import sqlite3
-import os
 import logging
-from typing import List, Dict, Optional
+import os
+import sqlite3
+import time
+from typing import Dict, List
+
+from .evaluator import citation_score, relevance_score, source_diversity_score
 from .llm import get_llm
 from .tools import web_search
-from .evaluator import relevance_score, citation_score, source_diversity_score
 
 logger = logging.getLogger(__name__)
 
@@ -110,15 +110,18 @@ _init_benchmark_tables()
 # Three approaches
 # ---------------------------------------------------------------------------
 
+
 def run_direct_llm(question: str) -> Dict:
     """Approach 1: Direct LLM — no search, no RAG."""
     start = time.time()
     try:
         llm = get_llm(temperature=0.2)
-        response = llm.invoke([
-            ("system", "You are a knowledgeable assistant. Answer the question clearly and concisely."),
-            ("human", question),
-        ])
+        response = llm.invoke(
+            [
+                ("system", "You are a knowledgeable assistant. Answer the question clearly and concisely."),
+                ("human", question),
+            ]
+        )
         report = response.content
         latency = int((time.time() - start) * 1000)
         rel, _ = relevance_score(question, report)
@@ -133,9 +136,15 @@ def run_direct_llm(question: str) -> Dict:
         }
     except Exception as exc:
         logger.error(f"Direct LLM failed: {exc}")
-        return {"approach": "direct_llm", "report": "", "source_count": 0,
-                "relevance_score": 0, "citation_score": 0, "diversity_score": 0,
-                "latency_ms": int((time.time() - start) * 1000)}
+        return {
+            "approach": "direct_llm",
+            "report": "",
+            "source_count": 0,
+            "relevance_score": 0,
+            "citation_score": 0,
+            "diversity_score": 0,
+            "latency_ms": int((time.time() - start) * 1000),
+        }
 
 
 def run_basic_rag(question: str) -> Dict:
@@ -145,21 +154,25 @@ def run_basic_rag(question: str) -> Dict:
         # Single search, no planning
         results = web_search(question, max_results=5)
         sources = {
-            i + 1: {"id": i + 1, "url": r.get("url", ""), "title": r.get("title", ""),
-                    "snippet": (r.get("content", "") or "")[:600]}
+            i
+            + 1: {
+                "id": i + 1,
+                "url": r.get("url", ""),
+                "title": r.get("title", ""),
+                "snippet": (r.get("content", "") or "")[:600],
+            }
             for i, r in enumerate(results)
         }
 
-        context = "\n\n".join(
-            f"[{s['id']}] {s['title']}\n{s['snippet']}"
-            for s in sources.values()
-        )
+        context = "\n\n".join(f"[{s['id']}] {s['title']}\n{s['snippet']}" for s in sources.values())
 
         llm = get_llm(temperature=0.2)
-        response = llm.invoke([
-            ("system", "Write a research report based on the sources. Cite with [n]."),
-            ("human", f"Question: {question}\n\nSources:\n{context}"),
-        ])
+        response = llm.invoke(
+            [
+                ("system", "Write a research report based on the sources. Cite with [n]."),
+                ("human", f"Question: {question}\n\nSources:\n{context}"),
+            ]
+        )
         report = response.content
         latency = int((time.time() - start) * 1000)
         rel, _ = relevance_score(question, report)
@@ -177,24 +190,37 @@ def run_basic_rag(question: str) -> Dict:
         }
     except Exception as exc:
         logger.error(f"Basic RAG failed: {exc}")
-        return {"approach": "basic_rag", "report": "", "source_count": 0,
-                "relevance_score": 0, "citation_score": 0, "diversity_score": 0,
-                "latency_ms": int((time.time() - start) * 1000)}
+        return {
+            "approach": "basic_rag",
+            "report": "",
+            "source_count": 0,
+            "relevance_score": 0,
+            "citation_score": 0,
+            "diversity_score": 0,
+            "latency_ms": int((time.time() - start) * 1000),
+        }
 
 
 def save_benchmark_result(question: str, result: Dict):
     conn = sqlite3.connect(DB_PATH)
-    conn.execute("""
+    conn.execute(
+        """
         INSERT INTO benchmark_runs
         (question, approach, report, relevance_score, citation_score,
          diversity_score, source_count, latency_ms)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        question, result["approach"], result.get("report", ""),
-        result.get("relevance_score", 0), result.get("citation_score", 0),
-        result.get("diversity_score", 0), result.get("source_count", 0),
-        result.get("latency_ms", 0),
-    ))
+    """,
+        (
+            question,
+            result["approach"],
+            result.get("report", ""),
+            result.get("relevance_score", 0),
+            result.get("citation_score", 0),
+            result.get("diversity_score", 0),
+            result.get("source_count", 0),
+            result.get("latency_ms", 0),
+        ),
+    )
     conn.commit()
     conn.close()
 

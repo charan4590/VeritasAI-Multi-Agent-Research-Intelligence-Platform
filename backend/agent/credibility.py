@@ -6,31 +6,71 @@ plos.org, frontiersin.org, mdpi.com to TIER_1.
 Added compute_research_confidence() that weights methodology/citation
 coverage, not just domain credibility.
 """
+
 import re
+from typing import Dict
 from urllib.parse import urlparse
-from typing import Dict, List
 
 TIER_1 = {
     # Core academic
-    "arxiv.org", "nature.com", "science.org", "pubmed.ncbi.nlm.nih.gov",
-    "scholar.google.com", "ieee.org", "acm.org", "springer.com",
-    "sciencedirect.com", "researchgate.net", "semanticscholar.org",
-    "cell.com", "thelancet.com", "nejm.org", "jamanetwork.com",
-    "plos.org", "frontiersin.org", "mdpi.com", "bmj.com",
-    "wiley.com", "tandfonline.com", "sagepub.com",
+    "arxiv.org",
+    "nature.com",
+    "science.org",
+    "pubmed.ncbi.nlm.nih.gov",
+    "scholar.google.com",
+    "ieee.org",
+    "acm.org",
+    "springer.com",
+    "sciencedirect.com",
+    "researchgate.net",
+    "semanticscholar.org",
+    "cell.com",
+    "thelancet.com",
+    "nejm.org",
+    "jamanetwork.com",
+    "plos.org",
+    "frontiersin.org",
+    "mdpi.com",
+    "bmj.com",
+    "wiley.com",
+    "tandfonline.com",
+    "sagepub.com",
     # Reference
-    "wikipedia.org", "britannica.com",
+    "wikipedia.org",
+    "britannica.com",
 }
 
 TIER_2 = {
-    "bbc.com", "bbc.co.uk", "reuters.com", "apnews.com", "nytimes.com",
-    "theguardian.com", "washingtonpost.com", "wsj.com", "bloomberg.com",
-    "ft.com", "economist.com", "forbes.com", "techcrunch.com",
-    "wired.com", "arstechnica.com", "theverge.com", "zdnet.com",
-    "mit.edu", "stanford.edu", "harvard.edu", "oxford.ac.uk",
-    "github.com", "stackoverflow.com", "docs.python.org",
-    "openai.com", "anthropic.com", "deepmind.com", "huggingface.co",
-    "kaggle.com", "towardsdatascience.com",
+    "bbc.com",
+    "bbc.co.uk",
+    "reuters.com",
+    "apnews.com",
+    "nytimes.com",
+    "theguardian.com",
+    "washingtonpost.com",
+    "wsj.com",
+    "bloomberg.com",
+    "ft.com",
+    "economist.com",
+    "forbes.com",
+    "techcrunch.com",
+    "wired.com",
+    "arstechnica.com",
+    "theverge.com",
+    "zdnet.com",
+    "mit.edu",
+    "stanford.edu",
+    "harvard.edu",
+    "oxford.ac.uk",
+    "github.com",
+    "stackoverflow.com",
+    "docs.python.org",
+    "openai.com",
+    "anthropic.com",
+    "deepmind.com",
+    "huggingface.co",
+    "kaggle.com",
+    "towardsdatascience.com",
 }
 
 TIER_3_TLDS = {".edu", ".gov", ".org", ".ac.uk", ".ac.in"}
@@ -63,9 +103,12 @@ def score_url(url: str) -> int:
 
 
 def score_label(score: int) -> str:
-    if score >= 90: return "High"
-    if score >= 70: return "Good"
-    if score >= 55: return "Medium"
+    if score >= 90:
+        return "High"
+    if score >= 70:
+        return "Good"
+    if score >= 55:
+        return "Medium"
     return "Low"
 
 
@@ -114,17 +157,18 @@ def compute_research_confidence(
     # Factor 4: content coverage — check for research sections in report
     report_lower = report.lower()
     coverage_keywords = [
-        "architecture", "dataset", "accuracy", "results",
-        "methodology", "experiment", "proposed", "model",
+        "architecture",
+        "dataset",
+        "accuracy",
+        "results",
+        "methodology",
+        "experiment",
+        "proposed",
+        "model",
     ]
     coverage_hits = sum(1 for kw in coverage_keywords if kw in report_lower)
     coverage_score = min(100, coverage_hits * 12.5)
 
     # Weighted combination
-    final = int(
-        avg_quality * 0.40 +
-        density * 0.25 +
-        academic_ratio * 0.20 +
-        coverage_score * 0.15
-    )
+    final = int(avg_quality * 0.40 + density * 0.25 + academic_ratio * 0.20 + coverage_score * 0.15)
     return min(100, final)

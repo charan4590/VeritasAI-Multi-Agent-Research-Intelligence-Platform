@@ -18,20 +18,19 @@ We estimate: 1 token ≈ 4 characters (industry standard rough estimate).
 When actual counts are available, we use those.
 """
 
-import os
-import time
 import json
+import os
 import sqlite3
-from typing import Dict, List, Optional
-from datetime import datetime
+import time
 from contextlib import contextmanager
+from typing import Dict, List, Optional
 
 DB_PATH = os.environ.get("DB_PATH", "research.db")
 
 # Cost per 1M tokens (USD) — approximate 2025 pricing
 MODEL_COSTS = {
-    "ollama": {"input": 0.0, "output": 0.0},          # local = free
-    "groq_llama3": {"input": 0.05, "output": 0.08},   # Groq llama3.1-8b
+    "ollama": {"input": 0.0, "output": 0.0},  # local = free
+    "groq_llama3": {"input": 0.05, "output": 0.08},  # Groq llama3.1-8b
     "groq_llama3_70b": {"input": 0.59, "output": 0.79},
     "default": {"input": 0.10, "output": 0.20},
 }
@@ -157,8 +156,7 @@ class RunTracker:
         else:
             self.total_output_tokens += estimated
 
-    def finish(self, session_id: Optional[int] = None, status: str = "done",
-               error: Optional[str] = None):
+    def finish(self, session_id: Optional[int] = None, status: str = "done", error: Optional[str] = None):
         if not self.run_id:
             return
         total_ms = _now_ms() - self.start_ms
@@ -168,7 +166,8 @@ class RunTracker:
             self.total_output_tokens,
         )
         with _get_conn() as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 UPDATE runs SET
                     session_id = ?,
                     total_latency_ms = ?,
@@ -180,12 +179,20 @@ class RunTracker:
                     status = ?,
                     error_message = ?
                 WHERE id = ?
-            """, (
-                session_id, total_ms,
-                self.total_input_tokens, self.total_output_tokens,
-                cost, int(self.rag_enabled), self.chunks_retrieved,
-                status, error, self.run_id,
-            ))
+            """,
+                (
+                    session_id,
+                    total_ms,
+                    self.total_input_tokens,
+                    self.total_output_tokens,
+                    cost,
+                    int(self.rag_enabled),
+                    self.chunks_retrieved,
+                    status,
+                    error,
+                    self.run_id,
+                ),
+            )
             conn.commit()
         _send_to_langsmith(self)
         return {
@@ -201,11 +208,10 @@ class RunTracker:
 # Query functions for the API
 # ---------------------------------------------------------------------------
 
+
 def get_run_metrics(limit: int = 20) -> List[Dict]:
     with _get_conn() as conn:
-        rows = conn.execute(
-            "SELECT * FROM runs ORDER BY created_at DESC LIMIT ?", (limit,)
-        ).fetchall()
+        rows = conn.execute("SELECT * FROM runs ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -237,6 +243,7 @@ def get_aggregate_stats() -> Dict:
 # Internals
 # ---------------------------------------------------------------------------
 
+
 def _now_ms() -> int:
     return int(time.time() * 1000)
 
@@ -257,18 +264,26 @@ def _estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
 def _save_node(record: Dict):
     try:
         with _get_conn() as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT INTO node_executions
                 (run_id, node_name, start_time_ms, end_time_ms, latency_ms,
                  input_tokens, output_tokens, success, error, metadata)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                record["run_id"], record["node_name"],
-                record["start_time_ms"], record["end_time_ms"],
-                record["latency_ms"], record["input_tokens"],
-                record["output_tokens"], record["success"],
-                record["error"], record["metadata"],
-            ))
+            """,
+                (
+                    record["run_id"],
+                    record["node_name"],
+                    record["start_time_ms"],
+                    record["end_time_ms"],
+                    record["latency_ms"],
+                    record["input_tokens"],
+                    record["output_tokens"],
+                    record["success"],
+                    record["error"],
+                    record["metadata"],
+                ),
+            )
             conn.commit()
     except Exception as exc:
         print(f"[obs] failed to save node record: {exc}")
@@ -284,6 +299,7 @@ def _send_to_langsmith(tracker: RunTracker):
         return
     try:
         import requests
+
         project = os.environ.get("LANGSMITH_PROJECT", "research-agent")
         requests.post(
             "https://api.smith.langchain.com/runs",

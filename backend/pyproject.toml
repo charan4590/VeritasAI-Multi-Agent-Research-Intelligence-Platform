@@ -1,0 +1,35 @@
+[tool.black]
+line-length = 110
+target-version = ["py311"]
+extend-exclude = '''
+/(
+  \.git
+  | __pycache__
+  | \.pytest_cache
+)/
+'''
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+extend-exclude = ["__pycache__", ".pytest_cache"]
+
+[tool.ruff.lint]
+# E/F/I = pycodestyle errors, pyflakes, isort. E501 (line-too-long) is
+# handled by Black instead (Black doesn't wrap long string literals, and
+# this codebase has many intentionally-long prompt/log strings where
+# splitting would hurt readability more than it helps).
+select = ["E", "F", "I"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# Test files intentionally do `sys.path.insert(...)` before importing the
+# local `agent` package (so pytest doesn't need a project-installed
+# package) — that ordering trips isort's "imports must come first" rule
+# for a reason that's deliberate, not a mistake.
+"tests/*.py" = ["E402", "I001"]
+# main.py intentionally calls load_dotenv() and sets up logging before
+# importing anything else, so that every other module sees env vars
+# already loaded and a logger already configured at their own import
+# time — also deliberate, not a mistake.
+"main.py" = ["E402"]

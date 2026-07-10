@@ -38,18 +38,17 @@ really a "citation health" score despite its name). Both scores coexist in
 the same report/API response — this divergence is deliberate, not a bug.
 """
 
-import os
-import re
 import json
 import logging
+import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from ..state import AgentState
-from ..llm import get_llm
 from ..cache import get_risk_cache
 from ..credibility import score_url
-from ..reflection import _count_domains, _check_contradictions
+from ..llm import get_llm
+from ..reflection import _check_contradictions, _count_domains
+from ..state import AgentState
 from .base import Agent
 
 logger = logging.getLogger(__name__)
@@ -71,6 +70,7 @@ def _risk_level(score: int) -> str:
 # ---------------------------------------------------------------------------
 # Heuristic signals — each is independently testable and has no LLM dependency
 # ---------------------------------------------------------------------------
+
 
 def _low_credibility_ratio(sources: Dict) -> Tuple[float, int, int]:
     if not sources:
@@ -154,9 +154,7 @@ def _compute_risk_signals(state: AgentState) -> Dict[str, Any]:
     low_ratio, low_count, total = _low_credibility_ratio(sources)
     if total and low_ratio > 0.4:
         score += 35 if low_ratio > 0.7 else 20
-        identified_risks.append(
-            f"{low_count} of {total} sources have low or unverified credibility."
-        )
+        identified_risks.append(f"{low_count} of {total} sources have low or unverified credibility.")
 
     # --- contradictions (reflection.py, reused unchanged) ---
     if sources and _check_contradictions(sources, question):
@@ -172,8 +170,7 @@ def _compute_risk_signals(state: AgentState) -> Dict[str, Any]:
     if sources and domain_count < 2:
         score += 15
         evidence_gaps.append(
-            f"All sources come from {domain_count} domain(s) — limited "
-            "diversity of perspective."
+            f"All sources come from {domain_count} domain(s) — limited " "diversity of perspective."
         )
 
     # --- single-source dominance ---
@@ -217,9 +214,7 @@ def _compute_risk_signals(state: AgentState) -> Dict[str, Any]:
         has_recent, most_recent_year = _recency_signal(sources)
         if most_recent_year is None:
             score += 5
-            evidence_gaps.append(
-                "No publication dates found in any source — recency cannot be assessed."
-            )
+            evidence_gaps.append("No publication dates found in any source — recency cannot be assessed.")
         elif not has_recent:
             score += 10
             identified_risks.append(
@@ -240,6 +235,7 @@ def _compute_risk_signals(state: AgentState) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Follow-up questions — the one part of this agent that needs an LLM
 # ---------------------------------------------------------------------------
+
 
 def _build_followup_prompt(question: str, signals: Dict[str, Any]) -> Tuple[str, str]:
     system = (

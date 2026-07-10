@@ -25,19 +25,19 @@ field, read defensively (`.get("source_type", "web")`) by every
 downstream consumer.
 """
 
+import logging
 import os
 import time
-import logging
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional
 
+from ..credibility import score_url
 from ..state import AgentState, Source
 from ..tools import fetch_full_content
-from ..credibility import score_url
 from .base import Agent
 from .intent import _detect_research_intent
-from .search import WebResearchAgent, AcademicSearchAgent
 from .pdf_agent import PDFAgent
+from .search import AcademicSearchAgent, WebResearchAgent
 
 logger = logging.getLogger(__name__)
 
@@ -62,10 +62,7 @@ def _fetch_full_content_batch(urls: List[str], timeout: int = FULL_FETCH_TIMEOUT
     failed = 0
 
     with ThreadPoolExecutor(max_workers=min(6, len(unique_urls))) as executor:
-        future_map = {
-            executor.submit(fetch_full_content, url, timeout): url
-            for url in unique_urls
-        }
+        future_map = {executor.submit(fetch_full_content, url, timeout): url for url in unique_urls}
         for future in future_map:
             url = future_map[future]
             try:
@@ -108,8 +105,8 @@ class SupervisorAgent(Agent):
 
     def run(self, state: AgentState) -> dict:
         reflection = state.get("reflection")
-        queries = state["plan"] if state["round"] == 0 else (
-            reflection.follow_up_queries if reflection else []
+        queries = (
+            state["plan"] if state["round"] == 0 else (reflection.follow_up_queries if reflection else [])
         )
 
         intent = _detect_research_intent(state["question"])

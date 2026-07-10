@@ -11,15 +11,15 @@ These test SupervisorAgent directly (unit-style, no LLM/graph needed)
 since that's where the merge logic lives — this matches the existing
 test suite's style (heuristic/logic tests, no live network or LLM calls).
 """
+
 import sys
 import os
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import pytest
 
 from agent.graph import initial_state
 from agent.agents.supervisor import SupervisorAgent
-
 
 WEB_RESULT = {
     "url": "https://arxiv.org/abs/fake-paper",
@@ -77,7 +77,9 @@ class TestPDFOnlyResearch:
     def test_pdf_sources_appear_when_web_is_empty(self, monkeypatch):
         agent = SupervisorAgent()
         monkeypatch.setattr(agent.web_agent, "search", lambda queries: {q: [] for q in queries})
-        monkeypatch.setattr(agent.pdf_agent, "search", lambda queries, top_k=3: {q: [PDF_CHUNK] for q in queries})
+        monkeypatch.setattr(
+            agent.pdf_agent, "search", lambda queries, top_k=3: {q: [PDF_CHUNK] for q in queries}
+        )
         monkeypatch.setattr("agent.agents.supervisor._fetch_full_content_batch", lambda urls: {})
 
         result = agent.run(_make_state())
@@ -95,7 +97,9 @@ class TestMixedWebAndPDFResearch:
     def test_both_source_types_present(self, monkeypatch):
         agent = SupervisorAgent()
         monkeypatch.setattr(agent.web_agent, "search", lambda queries: {q: [WEB_RESULT] for q in queries})
-        monkeypatch.setattr(agent.pdf_agent, "search", lambda queries, top_k=3: {q: [PDF_CHUNK] for q in queries})
+        monkeypatch.setattr(
+            agent.pdf_agent, "search", lambda queries, top_k=3: {q: [PDF_CHUNK] for q in queries}
+        )
         monkeypatch.setattr("agent.agents.supervisor._fetch_full_content_batch", lambda urls: {})
 
         result = agent.run(_make_state())
@@ -108,7 +112,9 @@ class TestMixedWebAndPDFResearch:
         separate numbering scheme for PDF-derived sources."""
         agent = SupervisorAgent()
         monkeypatch.setattr(agent.web_agent, "search", lambda queries: {q: [WEB_RESULT] for q in queries})
-        monkeypatch.setattr(agent.pdf_agent, "search", lambda queries, top_k=3: {q: [PDF_CHUNK] for q in queries})
+        monkeypatch.setattr(
+            agent.pdf_agent, "search", lambda queries, top_k=3: {q: [PDF_CHUNK] for q in queries}
+        )
         monkeypatch.setattr("agent.agents.supervisor._fetch_full_content_batch", lambda urls: {})
 
         result = agent.run(_make_state())
@@ -119,7 +125,9 @@ class TestMixedWebAndPDFResearch:
     def test_pdf_metrics_logged(self, monkeypatch):
         agent = SupervisorAgent()
         monkeypatch.setattr(agent.web_agent, "search", lambda queries: {q: [WEB_RESULT] for q in queries})
-        monkeypatch.setattr(agent.pdf_agent, "search", lambda queries, top_k=3: {q: [PDF_CHUNK] for q in queries})
+        monkeypatch.setattr(
+            agent.pdf_agent, "search", lambda queries, top_k=3: {q: [PDF_CHUNK] for q in queries}
+        )
         monkeypatch.setattr("agent.agents.supervisor._fetch_full_content_batch", lambda urls: {})
 
         result = agent.run(_make_state())
@@ -138,6 +146,7 @@ class TestEmptyPDFRetrieval:
 
     def test_pdf_agent_search_returns_empty_dict_values_when_no_pdfs(self, monkeypatch):
         import agent.agents.pdf_agent as pdf_agent_mod
+
         monkeypatch.setattr(pdf_agent_mod, "search_pdfs", lambda query, top_k: [])
 
         agent = pdf_agent_mod.PDFAgent()
@@ -182,8 +191,20 @@ class TestCitationLabeling:
 
         state = initial_state("test question")
         state["sources"] = {
-            1: {"id": 1, "url": "https://arxiv.org/abs/x", "title": "Web Paper", "snippet": "...", "source_type": "web"},
-            2: {"id": 2, "url": "pdf://doc.pdf#page1", "title": "doc.pdf (p.1)", "snippet": "...", "source_type": "pdf"},
+            1: {
+                "id": 1,
+                "url": "https://arxiv.org/abs/x",
+                "title": "Web Paper",
+                "snippet": "...",
+                "source_type": "web",
+            },
+            2: {
+                "id": 2,
+                "url": "pdf://doc.pdf#page1",
+                "title": "doc.pdf (p.1)",
+                "snippet": "...",
+                "source_type": "pdf",
+            },
         }
         state["report"] = "Web claim [1]. PDF claim [2]."
 
@@ -198,8 +219,20 @@ class TestCitationLabeling:
 
         state = initial_state("test question")
         state["sources"] = {
-            1: {"id": 1, "url": "https://arxiv.org/abs/x", "title": "Web Paper", "snippet": "...", "source_type": "web"},
-            2: {"id": 2, "url": "pdf://doc.pdf#page1", "title": "doc.pdf (p.1)", "snippet": "...", "source_type": "pdf"},
+            1: {
+                "id": 1,
+                "url": "https://arxiv.org/abs/x",
+                "title": "Web Paper",
+                "snippet": "...",
+                "source_type": "web",
+            },
+            2: {
+                "id": 2,
+                "url": "pdf://doc.pdf#page1",
+                "title": "doc.pdf (p.1)",
+                "snippet": "...",
+                "source_type": "pdf",
+            },
         }
         state["report"] = "Web claim [1]. PDF claim [2]."
 
@@ -215,7 +248,13 @@ class TestCitationLabeling:
 
         state = initial_state("test question")
         state["sources"] = {
-            1: {"id": 1, "url": "https://arxiv.org/abs/x", "title": "Web Paper", "snippet": "...", "source_type": "web"},
+            1: {
+                "id": 1,
+                "url": "https://arxiv.org/abs/x",
+                "title": "Web Paper",
+                "snippet": "...",
+                "source_type": "web",
+            },
         }
         state["report"] = "Web claim [1]."
 

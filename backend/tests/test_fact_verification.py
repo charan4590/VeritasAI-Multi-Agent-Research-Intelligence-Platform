@@ -13,16 +13,18 @@ Style matches test_pdf_agent.py: unit-level tests against the agent
 directly (no LLM/network/graph needed), using monkeypatch to swap in a
 fake LLM response.
 """
+
 import sys
 import os
 import json
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
 
 from agent.graph import initial_state
 import agent.agents.fact_verification as fv_mod
-from agent.agents.fact_verification import FactVerificationAgent, _extract_claims, _extract_body
+from agent.agents.fact_verification import FactVerificationAgent, _extract_claims
 
 
 @pytest.fixture(autouse=True)
@@ -39,6 +41,7 @@ def _isolated_verification_cache(monkeypatch):
     monkeypatch automatically reverts this after each test.
     """
     import agent.cache as cache_mod
+
     monkeypatch.setattr(cache_mod, "_backend_singleton", cache_mod.InMemoryCacheBackend())
     monkeypatch.setattr(cache_mod, "_instances", {})
     yield
@@ -53,6 +56,7 @@ class FakeLLM:
     """Returns a fixed JSON array response regardless of prompt content —
     tests control behavior via what they pass in, not by parsing the
     prompt."""
+
     def __init__(self, verdicts):
         self.verdicts = verdicts
         self.call_count = 0
@@ -70,8 +74,20 @@ def _make_state_with_report(report: str, sources: dict, citations_used: list):
     return state
 
 
-SOURCE_1 = {"id": 1, "url": "https://arxiv.org/abs/x", "title": "Paper X", "snippet": "The model achieves 94% accuracy on the benchmark dataset.", "source_type": "web"}
-SOURCE_2 = {"id": 2, "url": "https://arxiv.org/abs/y", "title": "Paper Y", "snippet": "No accuracy figures are reported in this preliminary study.", "source_type": "web"}
+SOURCE_1 = {
+    "id": 1,
+    "url": "https://arxiv.org/abs/x",
+    "title": "Paper X",
+    "snippet": "The model achieves 94% accuracy on the benchmark dataset.",
+    "source_type": "web",
+}
+SOURCE_2 = {
+    "id": 2,
+    "url": "https://arxiv.org/abs/y",
+    "title": "Paper Y",
+    "snippet": "No accuracy figures are reported in this preliminary study.",
+    "source_type": "web",
+}
 
 
 class TestSupportedClaims:
@@ -81,7 +97,8 @@ class TestSupportedClaims:
 
         state = _make_state_with_report(
             "The model achieves 94% accuracy on the benchmark dataset [1].",
-            {1: SOURCE_1}, [1],
+            {1: SOURCE_1},
+            [1],
         )
         result = FactVerificationAgent().run(state)
 
@@ -107,12 +124,15 @@ class TestSupportedClaims:
 
 class TestUnsupportedClaims:
     def test_unsupported_verdict_recorded(self, monkeypatch):
-        fake = FakeLLM([{"verdict": "unsupported", "confidence": 85, "reasoning": "Source says no figures reported."}])
+        fake = FakeLLM(
+            [{"verdict": "unsupported", "confidence": 85, "reasoning": "Source says no figures reported."}]
+        )
         monkeypatch.setattr(fv_mod, "get_llm", lambda temperature=0.0: fake)
 
         state = _make_state_with_report(
             "The model achieves 99% accuracy according to preliminary results [2].",
-            {2: SOURCE_2}, [2],
+            {2: SOURCE_2},
+            [2],
         )
         result = FactVerificationAgent().run(state)
 
@@ -122,10 +142,12 @@ class TestUnsupportedClaims:
 
 class TestMixedCitations:
     def test_mixed_verdicts_both_recorded(self, monkeypatch):
-        fake = FakeLLM([
-            {"verdict": "supported", "confidence": 90, "reasoning": "Matches."},
-            {"verdict": "unsupported", "confidence": 80, "reasoning": "Contradicted."},
-        ])
+        fake = FakeLLM(
+            [
+                {"verdict": "supported", "confidence": 90, "reasoning": "Matches."},
+                {"verdict": "unsupported", "confidence": 80, "reasoning": "Contradicted."},
+            ]
+        )
         monkeypatch.setattr(fv_mod, "get_llm", lambda temperature=0.0: fake)
 
         report = (
@@ -147,10 +169,17 @@ class TestMissingSourceText:
         fake = FakeLLM([])  # should never be called -- nothing verifiable to send
         monkeypatch.setattr(fv_mod, "get_llm", lambda temperature=0.0: fake)
 
-        empty_source = {"id": 3, "url": "https://arxiv.org/abs/z", "title": "Paper Z", "snippet": "", "source_type": "web"}
+        empty_source = {
+            "id": 3,
+            "url": "https://arxiv.org/abs/z",
+            "title": "Paper Z",
+            "snippet": "",
+            "source_type": "web",
+        }
         state = _make_state_with_report(
             "This claim cites a source with no retrievable text [3].",
-            {3: empty_source}, [3],
+            {3: empty_source},
+            [3],
         )
         result = FactVerificationAgent().run(state)
 
@@ -177,7 +206,8 @@ class TestVerificationCacheHits:
 
         state1 = _make_state_with_report(
             "The model achieves 94% accuracy on the benchmark dataset [1].",
-            {1: SOURCE_1}, [1],
+            {1: SOURCE_1},
+            [1],
         )
         result1 = FactVerificationAgent().run(state1)
         assert fake.call_count == 1
@@ -186,11 +216,14 @@ class TestVerificationCacheHits:
         # hit the cache and NOT call the LLM again.
         state2 = _make_state_with_report(
             "The model achieves 94% accuracy on the benchmark dataset [1].",
-            {1: SOURCE_1}, [1],
+            {1: SOURCE_1},
+            [1],
         )
         result2 = FactVerificationAgent().run(state2)
         assert fake.call_count == 1  # unchanged -- second run was a cache hit
-        assert result2["citation_verification"][0]["verdict"] == result1["citation_verification"][0]["verdict"]
+        assert (
+            result2["citation_verification"][0]["verdict"] == result1["citation_verification"][0]["verdict"]
+        )
 
     def test_cache_stats_show_hit(self, monkeypatch):
         import agent.cache as cache_mod
@@ -200,7 +233,8 @@ class TestVerificationCacheHits:
 
         state = _make_state_with_report(
             "The model achieves 94% accuracy on the benchmark dataset [1].",
-            {1: SOURCE_1}, [1],
+            {1: SOURCE_1},
+            [1],
         )
         FactVerificationAgent().run(state)
         FactVerificationAgent().run(state)
@@ -214,6 +248,7 @@ class TestFallbackOnVerifierError:
     def test_llm_exception_falls_back_gracefully(self, monkeypatch):
         def broken_get_llm(temperature=0.0):
             raise RuntimeError("simulated LLM outage")
+
         monkeypatch.setattr(fv_mod, "get_llm", broken_get_llm)
 
         original_report = "The model achieves 94% accuracy [1].\n\n---\n\n**Sources**\n\n[1] Paper X — https://arxiv.org/abs/x"
@@ -231,10 +266,13 @@ class TestFallbackOnVerifierError:
         class GarbageLLM:
             def invoke(self, messages):
                 return FakeResponse("this is not json at all")
+
         monkeypatch.setattr(fv_mod, "get_llm", lambda temperature=0.0: GarbageLLM())
 
         state = _make_state_with_report(
-            "The model achieves 94% accuracy [1].", {1: SOURCE_1}, [1],
+            "The model achieves 94% accuracy [1].",
+            {1: SOURCE_1},
+            [1],
         )
         result = FactVerificationAgent().run(state)
 
@@ -276,11 +314,13 @@ class TestObservabilityIntegration:
 
     def test_is_agent_subclass_with_name(self):
         from agent.agents.base import Agent
+
         agent = FactVerificationAgent()
         assert isinstance(agent, Agent)
         assert agent.name == "fact_verify"
 
     def test_registered_in_graph(self):
         from agent.graph import build_graph
+
         g = build_graph()
         assert "fact_verify" in g.nodes

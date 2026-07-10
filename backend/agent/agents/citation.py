@@ -44,11 +44,11 @@ class CitationAgent(Agent):
             report = re.sub(rf"\[{bad}\]", "", report)
 
         pdf_citations_count = sum(
-            1 for i in used_ids
-            if state["sources"][i].get("source_type", "web") == "pdf"
+            1 for i in used_ids if state["sources"][i].get("source_type", "web") == "pdf"
         )
 
         if used_ids:
+
             def _format_ref(i: int) -> str:
                 s = state["sources"][i]
                 tag = "[PDF] " if s.get("source_type", "web") == "pdf" else ""

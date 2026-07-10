@@ -26,15 +26,20 @@ remains an intentional scope boundary (no ReflectAgent yet).
 import logging
 from typing import Optional
 
-from langgraph.graph import StateGraph, START, END
+from langgraph.graph import END, START, StateGraph
 
-from .state import AgentState, ReflectionDecision
-from .reflection import smart_reflect
 from .agents import (
-    PlannerAgent, SupervisorAgent, RAGAgent, ReportGeneratorAgent,
-    CitationAgent, FactVerificationAgent, RiskAnalysisAgent,
-    _detect_research_intent,  # re-exported: main.py does `from agent.graph import _detect_research_intent`
+    CitationAgent,
+    FactVerificationAgent,
+    PlannerAgent,
+    RAGAgent,
+    ReportGeneratorAgent,
+    RiskAnalysisAgent,
+    SupervisorAgent,
+    _detect_research_intent,  # noqa: F401 -- re-exported: main.py does `from agent.graph import _detect_research_intent`
 )
+from .reflection import smart_reflect
+from .state import AgentState, ReflectionDecision
 
 logger = logging.getLogger(__name__)
 
@@ -44,11 +49,11 @@ logger = logging.getLogger(__name__)
 # Agent subclass; see module docstring above.
 # ---------------------------------------------------------------------------
 
+
 def reflect_node(state: AgentState) -> dict:
     if state["round"] >= state["max_rounds"]:
         decision = ReflectionDecision(
-            sufficient=True, follow_up_queries=[],
-            reasoning="Reached maximum search rounds."
+            sufficient=True, follow_up_queries=[], reasoning="Reached maximum search rounds."
         )
         return {
             "reflection": decision,
@@ -80,6 +85,7 @@ def route_after_reflect(state: AgentState) -> str:
 # Graph
 # ---------------------------------------------------------------------------
 
+
 def build_graph():
     g = StateGraph(AgentState)
     g.add_node("planner", PlannerAgent())
@@ -95,7 +101,8 @@ def build_graph():
     g.add_edge("planner", "search")
     g.add_edge("search", "reflect")
     g.add_conditional_edges(
-        "reflect", route_after_reflect,
+        "reflect",
+        route_after_reflect,
         {"search": "search", "rag": "rag"},
     )
     g.add_edge("rag", "synthesize")
@@ -106,16 +113,26 @@ def build_graph():
     return g.compile()
 
 
-def initial_state(question: str, max_rounds: int = 2,
-                  memories: Optional[list] = None,
-                  stream_callback=None,
-                  tracker=None,
-                  tracer=None) -> AgentState:
+def initial_state(
+    question: str,
+    max_rounds: int = 2,
+    memories: Optional[list] = None,
+    stream_callback=None,
+    tracker=None,
+    tracer=None,
+) -> AgentState:
     return AgentState(
-        question=question, plan=[], sources={}, round=0,
-        max_rounds=max_rounds, reflection=None,
-        report="", citations_used=[], log=[],
-        retrieved_chunks=[], rag_session_id=None,
+        question=question,
+        plan=[],
+        sources={},
+        round=0,
+        max_rounds=max_rounds,
+        reflection=None,
+        report="",
+        citations_used=[],
+        log=[],
+        retrieved_chunks=[],
+        rag_session_id=None,
         memories=memories or [],
         stream_callback=stream_callback,
         tracker=tracker,

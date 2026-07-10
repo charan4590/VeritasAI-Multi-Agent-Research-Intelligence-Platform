@@ -1,0 +1,102 @@
+name: CI
+
+# Runs on every push and PR against main. Four independent jobs (lint,
+# format, test, build) rather than one big script — a failure in one
+# shows up as its own red X in the PR checks list instead of a wall of
+# scrolled-past output, and they run in parallel so total wall-clock time
+# is roughly the slowest single job, not the sum of all four.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+defaults:
+  run:
+    working-directory: backend
+
+jobs:
+  lint:
+    name: Ruff (lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: backend/requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check .
+
+  format:
+    name: Black (format check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: backend/requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - run: black --check .
+
+  test:
+    name: Pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
+      - run: pip install -r requirements.txt
+      - name: Run test suite
+        env:
+          # Tests never make real network/LLM calls (see conftest.py and
+          # each test file's monkeypatching) -- these are placeholder
+          # values so any accidental unmocked call fails loudly and
+          # obviously instead of hanging on a real network request.
+          DB_PATH: ":memory:"
+          TAVILY_API_KEY: "ci-placeholder"
+          CACHE_ENABLED: "false"
+        run: pytest tests/ -v
+
+  build:
+    name: Build verification
+    runs-on: ubuntu-latest
+    needs: [lint, format, test]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image
+        working-directory: .
+        run: docker build --build-arg GIT_COMMIT=${{ github.sha }} -t research-agent:ci .
+      - name: Smoke-test the built image
+        working-directory: .
+        run: |
+          docker run -d --name research-agent-ci \
+            -e TAVILY_API_KEY=ci-placeholder \
+            -e DB_PATH=/tmp/ci.db \
+            -e CACHE_DIR=/tmp/ci-cache \
+            -e CHROMA_PATH=/tmp/ci-chroma \
+            -p 8000:8000 \
+            research-agent:ci
+          # Give the app a few seconds to start, then hit its own
+          # healthcheck endpoint from outside the container -- proves the
+          # image actually boots and serves traffic, not just that it built.
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:8000/api/health; then
+              echo "Health check passed"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Health check never succeeded -- dumping container logs:"
+          docker logs research-agent-ci
+          exit 1
+      - name: Tear down
+        if: always()
+        working-directory: .
+        run: docker rm -f research-agent-ci || true

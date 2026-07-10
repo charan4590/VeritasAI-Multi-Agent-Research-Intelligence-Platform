@@ -1,4 +1,5 @@
 """Shared test fixtures."""
+
 import os
 import pytest
 import tempfile
@@ -12,9 +13,24 @@ os.environ.setdefault("CHROMA_PATH", tempfile.mkdtemp())
 @pytest.fixture
 def sample_sources():
     return {
-        1: {"id": 1, "url": "https://arxiv.org/abs/123", "title": "AI Paper", "snippet": "Deep learning advances rapidly."},
-        2: {"id": 2, "url": "https://bbc.com/news/ai", "title": "BBC AI News", "snippet": "AI is transforming industries worldwide."},
-        3: {"id": 3, "url": "https://example.com/blog", "title": "Blog Post", "snippet": "Some thoughts on machine learning."},
+        1: {
+            "id": 1,
+            "url": "https://arxiv.org/abs/123",
+            "title": "AI Paper",
+            "snippet": "Deep learning advances rapidly.",
+        },
+        2: {
+            "id": 2,
+            "url": "https://bbc.com/news/ai",
+            "title": "BBC AI News",
+            "snippet": "AI is transforming industries worldwide.",
+        },
+        3: {
+            "id": 3,
+            "url": "https://example.com/blog",
+            "title": "Blog Post",
+            "snippet": "Some thoughts on machine learning.",
+        },
     }
 
 

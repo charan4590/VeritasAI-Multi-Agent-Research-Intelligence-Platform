@@ -39,11 +39,11 @@ Env vars:
   EMBED_CACHE_TTL   — seconds, default 604800 (7 days)
 """
 
-import os
-import time
 import hashlib
 import logging
+import os
 import threading
+import time
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -70,6 +70,7 @@ _MISSING = object()
 # ---------------------------------------------------------------------------
 # Backend interface
 # ---------------------------------------------------------------------------
+
 
 class CacheBackend(ABC):
     """Minimal interface a cache backend must implement. Swap-in point for
@@ -101,6 +102,7 @@ class DiskCacheBackend(CacheBackend):
 
     def __init__(self, directory: str):
         import diskcache  # local import: keep this optional at module load
+
         os.makedirs(directory, exist_ok=True)
         self._cache = diskcache.Cache(directory)
 
@@ -181,7 +183,9 @@ def _build_backend() -> CacheBackend:
                     "back to in-memory cache."
                 )
         except Exception as exc:
-            logger.warning(f"[cache] failed to initialize diskcache ({exc}) — falling back to in-memory cache.")
+            logger.warning(
+                f"[cache] failed to initialize diskcache ({exc}) — falling back to in-memory cache."
+            )
 
     logger.info("[cache] using in-memory backend")
     return InMemoryCacheBackend()
@@ -200,6 +204,7 @@ def _get_backend() -> CacheBackend:
 # ---------------------------------------------------------------------------
 # Cache — namespaced wrapper with hashed keys + hit/miss metrics
 # ---------------------------------------------------------------------------
+
 
 class Cache:
     """
@@ -321,7 +326,9 @@ def get_all_cache_stats() -> List[Dict[str, Any]]:
     /api/cache/stats endpoint, or a test/benchmark script, can call it
     directly."""
     return [
-        get_search_cache().stats(), get_fetch_cache().stats(),
-        get_embed_cache().stats(), get_verification_cache().stats(),
+        get_search_cache().stats(),
+        get_fetch_cache().stats(),
+        get_embed_cache().stats(),
+        get_verification_cache().stats(),
         get_risk_cache().stats(),
     ]

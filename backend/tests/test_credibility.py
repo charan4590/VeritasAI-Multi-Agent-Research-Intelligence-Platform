@@ -1,6 +1,8 @@
 """Unit tests for source credibility scoring."""
-import pytest
-import sys, os
+
+import sys
+import os
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from agent.credibility import score_url, score_label, compute_confidence
@@ -60,6 +62,9 @@ class TestComputeConfidence:
         assert confidence >= 35
 
     def test_five_citations_gives_full_credit(self):
-        sources = {i: {"id": i, "url": f"https://arxiv.org/{i}", "title": f"P{i}", "snippet": ""} for i in range(1, 6)}
+        sources = {
+            i: {"id": i, "url": f"https://arxiv.org/{i}", "title": f"P{i}", "snippet": ""}
+            for i in range(1, 6)
+        }
         confidence = compute_confidence(sources, list(range(1, 6)))
         assert confidence == 95  # arxiv score * 1.0 factor

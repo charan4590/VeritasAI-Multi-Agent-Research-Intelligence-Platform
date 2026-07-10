@@ -15,13 +15,14 @@ This makes the agent genuinely smarter — it fails fast on obvious gaps
 without wasting an LLM call, and catches subtle gaps the LLM might miss.
 """
 
-import re
 import json
 import logging
+import re
 from typing import Dict, List, Tuple
 from urllib.parse import urlparse
-from .state import ReflectionDecision
+
 from .llm import get_llm
+from .state import ReflectionDecision
 
 logger = logging.getLogger(__name__)
 
@@ -48,13 +49,17 @@ def _extract_subtopics(question: str) -> List[str]:
     """
     try:
         llm = get_llm(temperature=0.0)
-        response = llm.invoke([
-            ("system",
-             "Extract 3-5 key subtopics or aspects that a complete answer to this "
-             "question must cover. Respond ONLY with a JSON array of short strings.\n"
-             'Example: ["definition", "mechanism", "applications", "limitations"]'),
-            ("human", f"Question: {question}"),
-        ])
+        response = llm.invoke(
+            [
+                (
+                    "system",
+                    "Extract 3-5 key subtopics or aspects that a complete answer to this "
+                    "question must cover. Respond ONLY with a JSON array of short strings.\n"
+                    'Example: ["definition", "mechanism", "applications", "limitations"]',
+                ),
+                ("human", f"Question: {question}"),
+            ]
+        )
         text = response.content.strip()
         match = re.search(r"\[[\s\S]*?\]", text)
         if match:
@@ -72,10 +77,7 @@ def _check_subtopic_coverage(subtopics: List[str], sources: Dict) -> Tuple[bool,
     if not subtopics:
         return True, []
 
-    all_text = " ".join(
-        (s.get("title", "") + " " + s.get("snippet", "")).lower()
-        for s in sources.values()
-    )
+    all_text = " ".join((s.get("title", "") + " " + s.get("snippet", "")).lower() for s in sources.values())
 
     missing = []
     for topic in subtopics:
@@ -109,25 +111,69 @@ def _check_contradictions(sources: Dict, question: str) -> bool:
         ("supports", "contradicts"),
     ]
 
-    contradictions_found = sum(
-        1 for pos, neg in signal_pairs
-        if pos in combined and neg in combined
-    )
+    contradictions_found = sum(1 for pos, neg in signal_pairs if pos in combined and neg in combined)
     return contradictions_found >= 2
-
 
 
 # Academic research coverage signals
 ACADEMIC_REQUIRED_SIGNALS = {
-    "methodology": ["architecture", "model", "method", "approach", "algorithm",
-                    "network", "layer", "cnn", "lstm", "transformer", "hybrid",
-                    "proposed", "framework", "pipeline"],
-    "dataset": ["dataset", "data", "samples", "images", "patients", "training",
-                "testing", "validation", "benchmark", "corpus", "collected"],
-    "metrics": ["accuracy", "precision", "recall", "f1", "auc", "roc", "sensitivity",
-                "specificity", "dice", "iou", "mae", "rmse", "loss", "performance"],
-    "results": ["achieved", "outperforms", "compared", "baseline", "improvement",
-                "state-of-the-art", "sota", "experiment", "result", "score"],
+    "methodology": [
+        "architecture",
+        "model",
+        "method",
+        "approach",
+        "algorithm",
+        "network",
+        "layer",
+        "cnn",
+        "lstm",
+        "transformer",
+        "hybrid",
+        "proposed",
+        "framework",
+        "pipeline",
+    ],
+    "dataset": [
+        "dataset",
+        "data",
+        "samples",
+        "images",
+        "patients",
+        "training",
+        "testing",
+        "validation",
+        "benchmark",
+        "corpus",
+        "collected",
+    ],
+    "metrics": [
+        "accuracy",
+        "precision",
+        "recall",
+        "f1",
+        "auc",
+        "roc",
+        "sensitivity",
+        "specificity",
+        "dice",
+        "iou",
+        "mae",
+        "rmse",
+        "loss",
+        "performance",
+    ],
+    "results": [
+        "achieved",
+        "outperforms",
+        "compared",
+        "baseline",
+        "improvement",
+        "state-of-the-art",
+        "sota",
+        "experiment",
+        "result",
+        "score",
+    ],
 }
 
 
@@ -135,10 +181,25 @@ def _is_academic_query(question: str) -> bool:
     """Check if this is an academic/research query needing technical coverage."""
     q = question.lower()
     academic_terms = [
-        "deep learning", "neural network", "model", "architecture", "dataset",
-        "classification", "detection", "segmentation", "hybrid", "novel",
-        "proposed", "method", "algorithm", "accuracy", "benchmark",
-        "cancer", "medical", "imaging", "diagnosis",
+        "deep learning",
+        "neural network",
+        "model",
+        "architecture",
+        "dataset",
+        "classification",
+        "detection",
+        "segmentation",
+        "hybrid",
+        "novel",
+        "proposed",
+        "method",
+        "algorithm",
+        "accuracy",
+        "benchmark",
+        "cancer",
+        "medical",
+        "imaging",
+        "diagnosis",
     ]
     return sum(1 for t in academic_terms if t in q) >= 2
 
@@ -149,10 +210,7 @@ def _check_academic_coverage(sources: Dict) -> Tuple[bool, List[str]]:
     metrics, and results — not just source count and diversity.
     Returns (sufficient_coverage, missing_sections).
     """
-    all_text = " ".join(
-        (s.get("title", "") + " " + s.get("snippet", "")).lower()
-        for s in sources.values()
-    )
+    all_text = " ".join((s.get("title", "") + " " + s.get("snippet", "")).lower() for s in sources.values())
 
     missing = []
     for section, keywords in ACADEMIC_REQUIRED_SIGNALS.items():
@@ -241,17 +299,20 @@ def smart_reflect(
     # --- Final: LLM judgment (only if all heuristics pass) ---
     try:
         sources_summary = "\n".join(
-            f"[{s['id']}] {s['title']} — {s['snippet'][:150]}"
-            for s in list(sources.values())[:8]
+            f"[{s['id']}] {s['title']} — {s['snippet'][:150]}" for s in list(sources.values())[:8]
         )
         llm = get_llm(temperature=0.0)
-        response = llm.invoke([
-            ("system",
-             "You judge whether gathered research sources are sufficient to answer "
-             "a question comprehensively. Respond ONLY with JSON.\n"
-             '{"sufficient": true, "follow_up_queries": [], "reasoning": "one sentence"}'),
-            ("human", f"Question: {question}\n\nSources ({len(sources)} total):\n{sources_summary}"),
-        ])
+        response = llm.invoke(
+            [
+                (
+                    "system",
+                    "You judge whether gathered research sources are sufficient to answer "
+                    "a question comprehensively. Respond ONLY with JSON.\n"
+                    '{"sufficient": true, "follow_up_queries": [], "reasoning": "one sentence"}',
+                ),
+                ("human", f"Question: {question}\n\nSources ({len(sources)} total):\n{sources_summary}"),
+            ]
+        )
         text = response.content.strip()
         match = re.search(r"\{[\s\S]*?\}", text)
         if match:
@@ -276,6 +337,7 @@ def smart_reflect(
 # #4: Post-synthesis reflection — closes the loop after report is written
 # ---------------------------------------------------------------------------
 
+
 def post_synthesis_check(question: str, report: str) -> dict:
     """
     After synthesis, verify the report actually answers the original
@@ -289,16 +351,20 @@ def post_synthesis_check(question: str, report: str) -> dict:
     """
     try:
         llm = get_llm(temperature=0.0)
-        response = llm.invoke([
-            ("system",
-             "You are a strict quality reviewer. Given a research question and "
-             "the report written to answer it, judge if the report actually "
-             "satisfies the question. Respond ONLY with JSON:\n"
-             '{"satisfies_query": true, "weak_sections": [], "reasoning": "one sentence"}\n'
-             "weak_sections lists any section names that are too generic, vague, "
-             "or fail to address the question."),
-            ("human", f"Question: {question}\n\nReport (first 2000 chars):\n{report[:2000]}"),
-        ])
+        response = llm.invoke(
+            [
+                (
+                    "system",
+                    "You are a strict quality reviewer. Given a research question and "
+                    "the report written to answer it, judge if the report actually "
+                    "satisfies the question. Respond ONLY with JSON:\n"
+                    '{"satisfies_query": true, "weak_sections": [], "reasoning": "one sentence"}\n'
+                    "weak_sections lists any section names that are too generic, vague, "
+                    "or fail to address the question.",
+                ),
+                ("human", f"Question: {question}\n\nReport (first 2000 chars):\n{report[:2000]}"),
+            ]
+        )
         text = response.content.strip()
         match = re.search(r"\{[\s\S]*?\}", text)
         if match:

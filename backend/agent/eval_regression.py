@@ -13,11 +13,11 @@ Usage pattern:
      more than REGRESSION_THRESHOLD points
 """
 
+import logging
 import os
 import sqlite3
-import logging
-from typing import Dict, List, Optional
 from datetime import datetime
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 DB_PATH = os.environ.get("DB_PATH", "research.db")
@@ -62,18 +62,23 @@ def save_as_baseline(results: List[Dict], version_label: Optional[str] = None) -
     with _conn() as conn:
         conn.execute("UPDATE eval_baselines SET is_current = 0")
         for r in results:
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT INTO eval_baselines
                 (question, approach, relevance_score, citation_score,
                  diversity_score, overall_score, baseline_version, is_current)
                 VALUES (?, ?, ?, ?, ?, ?, ?, 1)
-            """, (
-                r.get("question", ""), r.get("approach", "agent"),
-                r.get("relevance_score", 0), r.get("citation_score", 0),
-                r.get("diversity_score", 0),
-                r.get("overall_score", r.get("relevance_score", 0)),
-                version,
-            ))
+            """,
+                (
+                    r.get("question", ""),
+                    r.get("approach", "agent"),
+                    r.get("relevance_score", 0),
+                    r.get("citation_score", 0),
+                    r.get("diversity_score", 0),
+                    r.get("overall_score", r.get("relevance_score", 0)),
+                    version,
+                ),
+            )
         conn.commit()
     logger.info(f"[eval-regression] saved baseline '{version}' with {len(results)} results")
     return version
@@ -81,9 +86,7 @@ def save_as_baseline(results: List[Dict], version_label: Optional[str] = None) -
 
 def get_current_baseline() -> List[Dict]:
     with _conn() as conn:
-        rows = conn.execute(
-            "SELECT * FROM eval_baselines WHERE is_current = 1"
-        ).fetchall()
+        rows = conn.execute("SELECT * FROM eval_baselines WHERE is_current = 1").fetchall()
     return [dict(r) for r in rows]
 
 
@@ -115,15 +118,23 @@ def check_regression(new_results: List[Dict]) -> Dict:
         delta = new_score - old_score
 
         if delta <= -REGRESSION_THRESHOLD:
-            regressions.append({
-                "question": q, "old_score": old_score,
-                "new_score": new_score, "delta": delta,
-            })
+            regressions.append(
+                {
+                    "question": q,
+                    "old_score": old_score,
+                    "new_score": new_score,
+                    "delta": delta,
+                }
+            )
         elif delta >= REGRESSION_THRESHOLD:
-            improvements.append({
-                "question": q, "old_score": old_score,
-                "new_score": new_score, "delta": delta,
-            })
+            improvements.append(
+                {
+                    "question": q,
+                    "old_score": old_score,
+                    "new_score": new_score,
+                    "delta": delta,
+                }
+            )
 
     return {
         "has_baseline": True,
@@ -133,6 +144,7 @@ def check_regression(new_results: List[Dict]) -> Dict:
         "passed": len(regressions) == 0,
         "message": (
             f"{len(regressions)} regression(s) detected"
-            if regressions else "No regressions — all scores within threshold"
+            if regressions
+            else "No regressions — all scores within threshold"
         ),
     }

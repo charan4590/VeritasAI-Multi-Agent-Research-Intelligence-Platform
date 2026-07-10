@@ -29,9 +29,9 @@ Degradation: if sentence-transformers isn't installed or model
   fails to load, falls back to original cosine-similarity order.
 """
 
-import os
 import logging
-from typing import List, Dict, Optional
+import os
+from typing import Dict, List
 
 logger = logging.getLogger(__name__)
 
@@ -47,9 +47,8 @@ def _load_reranker():
 
     try:
         from sentence_transformers import CrossEncoder
-        model_name = os.environ.get(
-            "RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2"
-        )
+
+        model_name = os.environ.get("RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
         logger.info(f"Loading cross-encoder: {model_name}")
         _reranker = CrossEncoder(model_name, max_length=512)
         _reranker_available = True
@@ -111,6 +110,7 @@ def rerank_chunks(
 
         # Boost score by source credibility
         from .credibility import score_url
+
         for chunk in scored_chunks:
             cred = score_url(chunk.get("url", "")) / 100.0  # normalize 0-1
             # Weighted combination: 70% cross-encoder, 30% credibility
@@ -123,9 +123,7 @@ def rerank_chunks(
         original_top = chunks[0].get("title", "?") if chunks else "?"
         reranked_top = scored_chunks[0].get("title", "?") if scored_chunks else "?"
         if original_top != reranked_top:
-            logger.info(
-                f"Re-ranking changed top result: '{original_top}' → '{reranked_top}'"
-            )
+            logger.info(f"Re-ranking changed top result: '{original_top}' → '{reranked_top}'")
 
         return scored_chunks[:top_k]
 

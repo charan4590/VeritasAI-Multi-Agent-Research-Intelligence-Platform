@@ -16,44 +16,61 @@ monolithic synthesis in graph.py is unchanged and remains the default,
 per the instruction to preserve existing behavior.
 """
 
-import os
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, List
+from typing import Dict
+
 from .llm import get_llm
 
 logger = logging.getLogger(__name__)
 
 ACADEMIC_SECTIONS = [
-    ("Introduction", "State the problem, its significance, and motivation for using deep learning. 2-3 paragraphs."),
-    ("Related Work", "Summarize prior methods chronologically, naming specific models and results. Cite with [n]."),
+    (
+        "Introduction",
+        "State the problem, its significance, and motivation for using deep learning. 2-3 paragraphs.",
+    ),
+    (
+        "Related Work",
+        "Summarize prior methods chronologically, naming specific models and results. Cite with [n].",
+    ),
     ("Proposed Method", "Describe the overall system design and key innovations. Cite with [n]."),
-    ("Model Architecture", "Detail neural network architecture: layer types, dimensions, activations, loss functions. Cite with [n]."),
+    (
+        "Model Architecture",
+        "Detail neural network architecture: layer types, dimensions, activations, loss functions. Cite with [n].",
+    ),
     ("Dataset", "For each dataset: name, size, modality, class distribution, preprocessing. Cite with [n]."),
-    ("Experimental Results", "Report exact numbers (accuracy, AUC, F1, etc) as a markdown table. Cite with [n]."),
+    (
+        "Experimental Results",
+        "Report exact numbers (accuracy, AUC, F1, etc) as a markdown table. Cite with [n].",
+    ),
     ("Comparison with Existing Methods", "Compare proposed method against baselines/SOTA with a table."),
     ("Limitations", "List specific limitations: dataset size, generalizability, computational cost."),
 ]
 
 
-def _generate_section(name: str, instruction: str, question: str,
-                      context_block: str, temperature: float) -> str:
+def _generate_section(
+    name: str, instruction: str, question: str, context_block: str, temperature: float
+) -> str:
     llm = get_llm(temperature=temperature)
-    response = llm.invoke([
-        ("system",
-         f"You are an expert research scientist writing the '{name}' section "
-         f"of a technical report. {instruction} "
-         "Cite EVERY factual claim with [n] using ONLY source ids from the "
-         "provided list. Never invent numbers — write 'not reported' if a "
-         "metric is absent from sources. Output ONLY the section content in "
-         "markdown, starting with a '## {name}' heading."),
-        ("human", f"Research topic: {question}\n\nSources:\n{context_block}"),
-    ])
+    response = llm.invoke(
+        [
+            (
+                "system",
+                f"You are an expert research scientist writing the '{name}' section "
+                f"of a technical report. {instruction} "
+                "Cite EVERY factual claim with [n] using ONLY source ids from the "
+                "provided list. Never invent numbers — write 'not reported' if a "
+                "metric is absent from sources. Output ONLY the section content in "
+                "markdown, starting with a '## {name}' heading.",
+            ),
+            ("human", f"Research topic: {question}\n\nSources:\n{context_block}"),
+        ]
+    )
     return response.content
 
 
-def sectioned_synthesis(question: str, context_block: str,
-                        sources: Dict, temperature: float = 0.1) -> str:
+def sectioned_synthesis(question: str, context_block: str, sources: Dict, temperature: float = 0.1) -> str:
     """
     Generate the 8 academic sections concurrently, then assemble with
     a References section built from cited sources. Used when

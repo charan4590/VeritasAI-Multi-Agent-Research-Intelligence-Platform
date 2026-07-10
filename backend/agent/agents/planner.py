@@ -7,13 +7,13 @@ its home (a class instead of a bare function) and its instrumentation
 (inherited from Agent.__call__, see base.py) are new.
 """
 
-import re
 import json
 import logging
+import re
 
-from ..state import AgentState
 from ..llm import get_llm
 from ..memory import format_memory_context, get_conversation_context
+from ..state import AgentState
 from .base import Agent
 from .intent import _detect_research_intent
 
@@ -99,10 +99,12 @@ class PlannerAgent(Agent):
             system_prompt += f"\n\n{conv_context}"
 
         llm = get_llm()
-        response = llm.invoke([
-            ("system", system_prompt),
-            ("human", state["question"]),
-        ])
+        response = llm.invoke(
+            [
+                ("system", system_prompt),
+                ("human", state["question"]),
+            ]
+        )
 
         data = parse_json(response.content)
         queries = data.get("queries") or [state["question"]]
@@ -111,7 +113,8 @@ class PlannerAgent(Agent):
         return {
             "plan": queries,
             "round": 0,
-            "log": state["log"] + [
+            "log": state["log"]
+            + [
                 f"Planned {len(queries)} {intent} search queries"
                 + (" (memory-enhanced)" if memory_context else "")
                 + (" (context-aware)" if conv_context else "")

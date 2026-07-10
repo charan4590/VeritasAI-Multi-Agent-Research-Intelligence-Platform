@@ -21,15 +21,15 @@ A span looks like:
   }
 """
 
-import os
 import json
+import logging
+import os
+import sqlite3
+import threading
 import time
 import uuid
-import sqlite3
-import logging
-import threading
-from typing import Optional, Dict, Any, List
 from contextlib import contextmanager
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 DB_PATH = os.environ.get("DB_PATH", "research.db")
@@ -63,8 +63,7 @@ init_tracing_tables()
 
 
 class Span:
-    def __init__(self, name: str, parent: Optional["Span"] = None,
-                 inputs: Optional[Dict] = None):
+    def __init__(self, name: str, parent: Optional["Span"] = None, inputs: Optional[Dict] = None):
         self.id = str(uuid.uuid4())[:12]
         self.parent_id = parent.id if parent else None
         self.name = name
@@ -78,8 +77,7 @@ class Span:
         if parent:
             parent.children.append(self)
 
-    def end(self, outputs: Optional[Dict] = None, status: str = "ok",
-            error: Optional[str] = None):
+    def end(self, outputs: Optional[Dict] = None, status: str = "ok", error: Optional[str] = None):
         self.end_ms = int(time.time() * 1000)
         self.outputs = outputs or {}
         self.status = status
@@ -154,8 +152,14 @@ class Tracer:
                 conn.execute(
                     """INSERT INTO traces (id, run_id, question, span_tree, total_duration_ms, status)
                        VALUES (?, ?, ?, ?, ?, ?)""",
-                    (trace_id, run_id, self.question,
-                     json.dumps(self.root.to_dict()), self.root.duration_ms, status),
+                    (
+                        trace_id,
+                        run_id,
+                        self.question,
+                        json.dumps(self.root.to_dict()),
+                        self.root.duration_ms,
+                        status,
+                    ),
                 )
                 conn.commit()
         except Exception as exc:
@@ -177,6 +181,7 @@ def get_recent_traces(limit: int = 20) -> List[Dict]:
     with _conn() as conn:
         rows = conn.execute(
             "SELECT id, run_id, question, total_duration_ms, status, created_at "
-            "FROM traces ORDER BY created_at DESC LIMIT ?", (limit,)
+            "FROM traces ORDER BY created_at DESC LIMIT ?",
+            (limit,),
         ).fetchall()
     return [dict(r) for r in rows]

@@ -24,16 +24,16 @@ failed run — exactly the opposite of "gracefully fall back to
 CitationAgent behavior."
 """
 
+import json
+import logging
 import os
 import re
-import json
 import time
-import logging
 from typing import Any, Dict, List, Optional, Tuple
 
-from ..state import AgentState
-from ..llm import get_llm
 from ..cache import get_verification_cache
+from ..llm import get_llm
+from ..state import AgentState
 from .base import Agent
 
 logger = logging.getLogger(__name__)
@@ -136,10 +136,7 @@ def _build_verification_prompt(claims: List[Dict[str, Any]]) -> Tuple[str, str]:
     )
     lines = []
     for i, c in enumerate(claims):
-        lines.append(
-            f'Claim {i + 1}: "{c["sentence"]}"\n'
-            f'Source text: "{c["source_text"][:800]}"'
-        )
+        lines.append(f'Claim {i + 1}: "{c["sentence"]}"\n' f'Source text: "{c["source_text"][:800]}"')
     human = "\n\n".join(lines) + f"\n\nRespond with a JSON array of exactly {len(claims)} objects."
     return system, human
 
@@ -211,12 +208,12 @@ class FactVerificationAgent(Agent):
             # This is the core fallback contract: never let a verification
             # failure touch the report CitationAgent already produced.
             logger.warning(
-                f"Fact verification failed ({exc}) — falling back to "
-                "CitationAgent output unchanged"
+                f"Fact verification failed ({exc}) — falling back to " "CitationAgent output unchanged"
             )
             return {
                 **empty_result,
-                "log": state["log"] + [
+                "log": state["log"]
+                + [
                     "Fact verification unavailable — report unchanged "
                     "(CitationAgent validation still applies)"
                 ],
@@ -224,13 +221,15 @@ class FactVerificationAgent(Agent):
         elapsed_ms = int((time.time() - start) * 1000)
 
         for c in missing_source:
-            results.append({
-                "sentence": c["sentence"],
-                "citation_id": c["citation_id"],
-                "verdict": "cannot_determine",
-                "confidence": 0,
-                "reasoning": "No source text available to verify against.",
-            })
+            results.append(
+                {
+                    "sentence": c["sentence"],
+                    "citation_id": c["citation_id"],
+                    "verdict": "cannot_determine",
+                    "confidence": 0,
+                    "reasoning": "No source text available to verify against.",
+                }
+            )
 
         overall_confidence = self._aggregate_confidence(results)
         verdict_counts = self._count_verdicts(results)

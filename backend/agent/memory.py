@@ -20,9 +20,9 @@ memories and the agent runs normally with no memory context.
 """
 
 import os
-import json
-from typing import List, Dict, Optional
-from .rag import embed_text, _get_chroma
+from typing import Dict, List, Optional
+
+from .rag import _get_chroma, embed_text
 
 MEMORY_COLLECTION = "agent_memory"
 MEMORY_TOP_K = int(os.environ.get("MEMORY_TOP_K", "2"))
@@ -41,8 +41,7 @@ def _get_memory_collection():
         return None
 
 
-def store_memory(session_id: int, question: str, report_summary: str,
-                 eval_scores: Optional[Dict] = None):
+def store_memory(session_id: int, question: str, report_summary: str, eval_scores: Optional[Dict] = None):
     """
     Store a completed research session as a memory vector.
     Only stores sessions with overall_score >= 50 to avoid
@@ -68,12 +67,14 @@ def store_memory(session_id: int, question: str, report_summary: str,
             ids=[str(session_id)],
             embeddings=[embedding],
             documents=[question],
-            metadatas=[{
-                "session_id": str(session_id),
-                "question": question,
-                "summary": summary,
-                "overall_score": str(eval_scores.get("overall_score", 0) if eval_scores else 0),
-            }],
+            metadatas=[
+                {
+                    "session_id": str(session_id),
+                    "question": question,
+                    "summary": summary,
+                    "overall_score": str(eval_scores.get("overall_score", 0) if eval_scores else 0),
+                }
+            ],
         )
         print(f"[memory] stored session {session_id}")
     except Exception as exc:
@@ -109,13 +110,15 @@ def retrieve_memories(question: str) -> List[Dict]:
             similarity = round(1 - dist, 3)
             # Only inject memories above threshold to avoid noise
             if similarity >= MEMORY_THRESHOLD:
-                memories.append({
-                    "session_id": meta.get("session_id"),
-                    "question": meta.get("question", doc),
-                    "summary": meta.get("summary", ""),
-                    "overall_score": int(meta.get("overall_score", 0)),
-                    "similarity": similarity,
-                })
+                memories.append(
+                    {
+                        "session_id": meta.get("session_id"),
+                        "question": meta.get("question", doc),
+                        "summary": meta.get("summary", ""),
+                        "overall_score": int(meta.get("overall_score", 0)),
+                        "similarity": similarity,
+                    }
+                )
 
         return memories
     except Exception as exc:
@@ -130,9 +133,7 @@ def format_memory_context(memories: List[Dict]) -> str:
     if not memories:
         return ""
 
-    lines = [
-        "\n## Relevant Past Research (use as context, don't repeat verbatim)\n"
-    ]
+    lines = ["\n## Relevant Past Research (use as context, don't repeat verbatim)\n"]
     for m in memories:
         lines.append(
             f"- Past question [{m['similarity']:.0%} similar]: \"{m['question']}\"\n"
@@ -162,10 +163,12 @@ MAX_CONTEXT_TURNS = int(os.environ.get("MAX_CONTEXT_TURNS", "5"))
 def add_conversation_turn(question: str, summary: str):
     """Track questions asked in this session for context injection."""
     global _conversation_context
-    _conversation_context.append({
-        "question": question,
-        "summary": summary[:300],
-    })
+    _conversation_context.append(
+        {
+            "question": question,
+            "summary": summary[:300],
+        }
+    )
     # Keep only recent turns
     _conversation_context = _conversation_context[-MAX_CONTEXT_TURNS:]
 
@@ -182,7 +185,7 @@ def get_conversation_context() -> str:
         return ""
     lines = ["## Current Session Context (build on these if relevant)"]
     for turn in _conversation_context:
-        lines.append('- Previously asked: ' + repr(turn['question']))
+        lines.append("- Previously asked: " + repr(turn["question"]))
         if turn["summary"]:
             lines.append(f"  Summary: {turn['summary'][:150]}...")
     return "\n".join(lines)

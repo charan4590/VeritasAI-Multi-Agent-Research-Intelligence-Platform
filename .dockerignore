@@ -1,0 +1,26 @@
+# Keep the Docker build context small and avoid leaking local
+# state/secrets into image layers.
+
+.git/
+.github/
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+
+# Local runtime state -- never bake into the image, always comes from
+# the mounted volume (see docker-compose.yml) or a real .env at runtime.
+backend/.env
+data/
+backend/research.db
+backend/*.db
+**/data/cache/
+**/data/chroma_db/
+
+# Editor/OS cruft
+.vscode/
+.idea/
+.DS_Store
+
+# Docs not needed inside the running container
+*.md
+!README.md

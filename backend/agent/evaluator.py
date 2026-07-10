@@ -19,11 +19,10 @@ heuristic scores are fast, deterministic, and catch the most common failures.
 """
 
 import re
-import os
 from typing import Dict, List, Tuple
 from urllib.parse import urlparse
-from .llm import get_llm
 
+from .llm import get_llm
 
 # ---------------------------------------------------------------------------
 # Heuristic evaluators (instant, no LLM call)
@@ -74,8 +73,7 @@ def source_diversity_score(sources: Dict, citations_used: List[int]) -> Tuple[in
     return score, f"{count} unique domains cited"
 
 
-def hallucination_risk_score(report: str, sources: Dict,
-                              citations_used: List[int]) -> Tuple[int, str]:
+def hallucination_risk_score(report: str, sources: Dict, citations_used: List[int]) -> Tuple[int, str]:
     """
     What fraction of citation markers in the report are valid?
     Score: 100 = all citations verified, 0 = all citations hallucinated.
@@ -101,6 +99,7 @@ def hallucination_risk_score(report: str, sources: Dict,
 # LLM evaluator (one call, focused prompt)
 # ---------------------------------------------------------------------------
 
+
 def relevance_score(question: str, report: str) -> Tuple[int, str]:
     """
     Ask the LLM to score how well the report answers the question.
@@ -112,17 +111,21 @@ def relevance_score(question: str, report: str) -> Tuple[int, str]:
     """
     try:
         llm = get_llm(temperature=0.0)
-        response = llm.invoke([
-            ("system",
-             "You are an expert evaluator. Score how well the report answers "
-             "the question on a scale of 1 to 10. Be strict.\n"
-             "Respond with ONLY a JSON object: "
-             '{"score": 7, "reason": "one sentence"}'),
-            ("human",
-             f"Question: {question}\n\nReport (first 1000 chars):\n{report[:1000]}"),
-        ])
+        response = llm.invoke(
+            [
+                (
+                    "system",
+                    "You are an expert evaluator. Score how well the report answers "
+                    "the question on a scale of 1 to 10. Be strict.\n"
+                    "Respond with ONLY a JSON object: "
+                    '{"score": 7, "reason": "one sentence"}',
+                ),
+                ("human", f"Question: {question}\n\nReport (first 1000 chars):\n{report[:1000]}"),
+            ]
+        )
         import json
         import re as _re
+
         text = response.content.strip()
         match = _re.search(r"\{[\s\S]*?\}", text)
         if match:
@@ -138,6 +141,7 @@ def relevance_score(question: str, report: str) -> Tuple[int, str]:
 # ---------------------------------------------------------------------------
 # Master evaluator
 # ---------------------------------------------------------------------------
+
 
 def evaluate_report(
     question: str,
@@ -160,12 +164,7 @@ def evaluate_report(
     hal_score, hal_reason = hallucination_risk_score(report, sources, citations_used)
 
     # Weighted average: relevance 40%, citations 25%, diversity 20%, hallucination 15%
-    overall = int(
-        rel_score * 0.40 +
-        cit_score * 0.25 +
-        div_score * 0.20 +
-        hal_score * 0.15
-    )
+    overall = int(rel_score * 0.40 + cit_score * 0.25 + div_score * 0.20 + hal_score * 0.15)
 
     return {
         "overall_score": overall,

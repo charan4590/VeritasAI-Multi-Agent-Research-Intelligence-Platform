@@ -2,60 +2,220 @@
 Production async FastAPI backend — Python 3.9 compatible.
 """
 
-import os
-import json
-import time
 import asyncio
+import json
 import logging
+import os
+import platform
 import threading
+import time
+import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
+
 from dotenv import load_dotenv
 
 load_dotenv()
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
+
+# ---------------------------------------------------------------------------
+# Phase 4: Structured logging.
+# LOG_FORMAT=json emits one JSON object per line (log aggregator friendly —
+# CloudWatch, Datadog, Loki, etc. all parse this natively without a custom
+# grok pattern). Default stays human-readable text for local development,
+# where a log aggregator isn't in the loop and plain text is easier to
+# scan. Nothing about *what* gets logged changes, only how it's formatted.
+# ---------------------------------------------------------------------------
+
+
+class _JSONFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        payload = {
+            "timestamp": self.formatTime(record, "%Y-%m-%dT%H:%M:%S%z"),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        request_id = getattr(record, "request_id", None)
+        if request_id:
+            payload["request_id"] = request_id
+        if record.exc_info:
+            payload["exc_info"] = self.formatException(record.exc_info)
+        return json.dumps(payload)
+
+
+_log_handler = logging.StreamHandler()
+if os.environ.get("LOG_FORMAT", "text").lower() == "json":
+    _log_handler.setFormatter(_JSONFormatter())
+else:
+    _log_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+
+logging.basicConfig(level=logging.INFO, handlers=[_log_handler], force=True)
 logger = logging.getLogger(__name__)
 
-from fastapi import FastAPI, Query, HTTPException, Depends, UploadFile, File
+from typing import AsyncIterator, List, Optional
+
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
-from typing import Optional, Dict, AsyncIterator
+from pydantic import BaseModel, Field
 
 from agent import (
-    build_graph, initial_state,
-    run_debate, generate_follow_ups,
-    compute_confidence, score_url, score_label,
     StreamAborted,
+    build_graph,
+    compute_confidence,
+    generate_follow_ups,
+    initial_state,
+    run_debate,
+    score_label,
+    score_url,
+)
+from agent.benchmark import (
+    get_benchmark_questions,
+    get_benchmark_results,
+    run_basic_rag,
+    run_direct_llm,
+    save_benchmark_result,
 )
 from agent.credibility import compute_research_confidence
-from agent.graph import _detect_research_intent
+from agent.eval_regression import check_regression, get_current_baseline, save_as_baseline
 from agent.evaluator import evaluate_report
-from agent.memory import retrieve_memories, store_memory, delete_memory, add_conversation_turn
-from agent.observability import RunTracker, init_observability_tables, get_run_metrics, get_node_breakdown, get_aggregate_stats
-from agent.pdf_ingestion import ingest_pdf, list_ingested_docs, delete_doc
-from agent.benchmark import run_direct_llm, run_basic_rag, save_benchmark_result, get_benchmark_results, get_benchmark_questions
-from agent.tracing import Tracer, get_trace, get_recent_traces
-from agent.guardrails import check_rate_limit, ConcurrencyGuard, RateLimitExceeded, ConcurrencyLimitExceeded, get_guardrail_status
-from agent.eval_regression import save_as_baseline, check_regression, get_current_baseline
-from db import init_db, save_session, get_history, get_session, delete_session
+from agent.graph import _detect_research_intent
+from agent.guardrails import (
+    ConcurrencyGuard,
+    ConcurrencyLimitExceeded,
+    RateLimitExceeded,
+    check_rate_limit,
+    get_guardrail_status,
+)
+from agent.memory import add_conversation_turn, delete_memory, retrieve_memories, store_memory
+from agent.observability import (
+    RunTracker,
+    get_aggregate_stats,
+    get_node_breakdown,
+    get_run_metrics,
+    init_observability_tables,
+)
+from agent.pdf_ingestion import delete_doc, ingest_pdf, list_ingested_docs
+from agent.tracing import Tracer, get_recent_traces, get_trace
+from db import delete_session, get_history, get_session, init_db, save_session
 
 # ---------------------------------------------------------------------------
-# Startup
+# Phase 4: version + response models
+# ---------------------------------------------------------------------------
+# Single source of truth for the version string — /api/health and
+# /api/version both read this instead of each hard-coding their own
+# (previously /api/health hard-coded "2.0.0" independently; that's the
+# kind of drift a single constant exists to prevent).
+APP_VERSION = "3.4.0"  # Phase 3 Milestone 4 (Risk Analysis Agent) complete
+
+
+class HealthResponse(BaseModel):
+    status: str = Field(..., examples=["ok"])
+    version: str = Field(..., examples=[APP_VERSION])
+
+
+class VersionResponse(BaseModel):
+    version: str = Field(..., examples=[APP_VERSION])
+    git_commit: str = Field(
+        ...,
+        description="Short git SHA baked in at Docker build time via --build-arg GIT_COMMIT, or 'unknown' outside Docker.",
+        examples=["a1b2c3d"],
+    )
+    python_version: str = Field(..., examples=[platform.python_version()])
+    graph_nodes: List[str] = Field(
+        ..., description="LangGraph node names in the compiled research pipeline, in registration order."
+    )
+
+
+class LoginRequest(BaseModel):
+    password: Optional[str] = Field(None, description="Required only when AUTH_ENABLED=true.")
+
+
+# ---------------------------------------------------------------------------
+# Startup / shutdown
 # ---------------------------------------------------------------------------
 
 init_db()
 init_observability_tables()
 
-app = FastAPI(title="Research Agent")
-app.add_middleware(
-    CORSMiddleware, allow_origins=["*"],
-    allow_methods=["*"], allow_headers=["*"],
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup already happened above (module-level init_db()/build_graph()
+    # calls) — this exists mainly to document and log shutdown behavior.
+    #
+    # Graceful shutdown: uvicorn (and gunicorn's uvicorn worker class)
+    # already stop accepting new connections and drain in-flight HTTP
+    # requests before the process exits on SIGTERM — that's uvicorn's
+    # default behavior, nothing here needs to implement it. What *is*
+    # worth knowing operationally:
+    #   - SQLite connections are opened per-request via `with get_conn()`
+    #     (db.py) and closed immediately after, never held open across
+    #     the process lifetime — there's no connection pool to drain.
+    #   - An in-flight research run's background thread (run_graph(),
+    #     see _run_research_stream in this file) is NOT forcibly killed
+    #     on shutdown; if the process exits mid-run, that thread simply
+    #     stops existing along with the process. The SSE client sees a
+    #     dropped connection, same as any other network interruption
+    #     Milestone 1's StreamAborted handling already covers gracefully.
+    #   - Set `--timeout-graceful-shutdown <seconds>` on uvicorn (or
+    #     equivalent gunicorn setting) in production to bound how long
+    #     shutdown waits for in-flight requests before forcing exit —
+    #     see DEPLOY.md for recommended values per platform.
+    yield
+    logger.info("Shutting down — in-flight requests are being drained by uvicorn before exit.")
+
+
+app = FastAPI(
+    title="Research Agent — Enterprise AI Research Intelligence Platform",
+    description=(
+        "A supervisor-orchestrated multi-agent research pipeline: parallel "
+        "web/academic/PDF retrieval, RAG, streaming synthesis, citation "
+        "validation, claim-level fact verification, and heuristic risk "
+        "analysis. See /docs for interactive API exploration, or "
+        "SYSTEM_DESIGN.md in the repo for the full architecture."
+    ),
+    version=APP_VERSION,
+    contact={"name": "Project README", "url": "https://github.com/"},
+    license_info={"name": "MIT"},
+    lifespan=lifespan,
 )
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: request ID + timing middleware
+# ---------------------------------------------------------------------------
+# Every response gets an X-Request-ID (client-supplied if present, so a
+# frontend or load balancer can propagate its own trace id end-to-end;
+# generated otherwise) and an X-Response-Time-Ms header, and every request
+# gets exactly one summary log line. This is intentionally separate from
+# the per-agent RunTracker/Tracer instrumentation (Phase 3) — that measures
+# pipeline internals; this measures the HTTP layer around it, including
+# routes RunTracker never sees (history, metrics, health, static files).
+
+
+@app.middleware("http")
+async def request_id_and_timing(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4())[:8])
+    start = time.time()
+    response = await call_next(request)
+    duration_ms = int((time.time() - start) * 1000)
+    response.headers["X-Request-ID"] = request_id
+    response.headers["X-Response-Time-Ms"] = str(duration_ms)
+    logger.info(
+        f"{request.method} {request.url.path} -> {response.status_code} ({duration_ms}ms)",
+        extra={"request_id": request_id},
+    )
+    return response
+
 
 _graph = build_graph()
 logger.info("Graph compiled. Nodes: %s", list(_graph.nodes.keys()))
@@ -67,19 +227,21 @@ RESEARCH_TIMEOUT = int(os.environ.get("RESEARCH_TIMEOUT", "120"))
 # Auth — simplified, no JWT required for local use
 # ---------------------------------------------------------------------------
 
-@app.get("/api/auth/check")
+
+@app.get("/api/auth/check", tags=["meta"])
 async def auth_check():
     return {"requires_password": False}
 
 
-@app.post("/api/auth/login")
-async def login(body: dict):
+@app.post("/api/auth/login", tags=["meta"])
+async def login(body: LoginRequest):
     return {"ok": True}
 
 
 # ---------------------------------------------------------------------------
 # SSE helper
 # ---------------------------------------------------------------------------
+
 
 def sse(data: dict) -> str:
     return f"data: {json.dumps(data)}\n\n"
@@ -88,6 +250,7 @@ def sse(data: dict) -> str:
 # ---------------------------------------------------------------------------
 # Research stream
 # ---------------------------------------------------------------------------
+
 
 async def _run_research_stream(question: str, max_rounds: int) -> AsyncIterator[str]:
     tracker = RunTracker(question=question, mode="research")
@@ -125,14 +288,22 @@ async def _run_research_stream(question: str, max_rounds: int) -> AsyncIterator[
             return
 
         try:
-            mem_span = tracer.root  # lightweight: track memory step without deep nesting
             memories = retrieve_memories(question)
             if memories:
-                queue.put_nowait(sse({"type": "progress", "node": "memory",
-                    "message": f"Found {len(memories)} relevant past session(s)"}))
+                queue.put_nowait(
+                    sse(
+                        {
+                            "type": "progress",
+                            "node": "memory",
+                            "message": f"Found {len(memories)} relevant past session(s)",
+                        }
+                    )
+                )
 
             state = initial_state(
-                question, max_rounds=max_rounds, memories=memories,
+                question,
+                max_rounds=max_rounds,
+                memories=memories,
                 stream_callback=stream_token_callback,
                 # Phase 3 Milestone 1: this is what actually activates
                 # RunTracker.node() / Tracer.span() per agent — both
@@ -155,8 +326,7 @@ async def _run_research_stream(question: str, max_rounds: int) -> AsyncIterator[
                     log = partial.get("log")
                     if log:
                         for entry in log[last_log:]:
-                            queue.put_nowait(sse({"type": "progress", "node": node,
-                                                  "message": entry}))
+                            queue.put_nowait(sse({"type": "progress", "node": node, "message": entry}))
                         last_log = len(log)
                     if "sources" in partial:
                         latest_sources = partial["sources"]
@@ -191,7 +361,8 @@ async def _run_research_stream(question: str, max_rounds: int) -> AsyncIterator[
                     # for anyone not looking for it.
                     "source_type": latest_sources[i].get("source_type", "web"),
                 }
-                for i in used if i in latest_sources
+                for i in used
+                if i in latest_sources
             }
 
             _intent = _detect_research_intent(question)
@@ -200,17 +371,28 @@ async def _run_research_stream(question: str, max_rounds: int) -> AsyncIterator[
             else:
                 confidence = compute_confidence(latest_sources, used)
 
-            queue.put_nowait(sse({"type": "progress", "node": "eval", "message": "Evaluating report quality..."}))
+            queue.put_nowait(
+                sse({"type": "progress", "node": "eval", "message": "Evaluating report quality..."})
+            )
             eval_scores = evaluate_report(
                 question=question,
                 report=final_state.get("report", ""),
                 sources=latest_sources,
                 citations_used=used,
             )
-            queue.put_nowait(sse({"type": "progress", "node": "eval",
-                "message": f"Quality: {eval_scores['overall_score']}/100 — Grade {eval_scores['grade']}"}))
+            queue.put_nowait(
+                sse(
+                    {
+                        "type": "progress",
+                        "node": "eval",
+                        "message": f"Quality: {eval_scores['overall_score']}/100 — Grade {eval_scores['grade']}",
+                    }
+                )
+            )
 
-            queue.put_nowait(sse({"type": "progress", "node": "followup", "message": "Generating follow-up questions..."}))
+            queue.put_nowait(
+                sse({"type": "progress", "node": "followup", "message": "Generating follow-up questions..."})
+            )
             follow_ups = generate_follow_ups(question, final_state.get("report", ""))
 
             latency_ms = int((time.time() - run_start) * 1000)
@@ -236,35 +418,45 @@ async def _run_research_stream(question: str, max_rounds: int) -> AsyncIterator[
                 recommended_follow_up_questions=final_state.get("recommended_follow_up_questions", []),
             )
 
-            store_memory(session_id=session_id, question=question,
-                         report_summary=final_state.get("report", ""), eval_scores=eval_scores)
+            store_memory(
+                session_id=session_id,
+                question=question,
+                report_summary=final_state.get("report", ""),
+                eval_scores=eval_scores,
+            )
             add_conversation_turn(question, final_state.get("report", ""))
             tracker.finish(session_id=session_id, status="done")
 
-            queue.put_nowait(sse({
-                "type": "done",
-                "report": final_state.get("report", ""),
-                "citations_used": used,
-                "sources": sources_payload,
-                "confidence": confidence,
-                "follow_ups": follow_ups,
-                "eval_scores": eval_scores,
-                "rag_chunks": rag_chunks,
-                "latency_ms": latency_ms,
-                "session_id": session_id,
-                # Phase 3 Milestone 3: [] / None when verification found
-                # nothing to check or fell back gracefully — always
-                # present so the frontend never needs an `in` check.
-                "citation_verification": final_state.get("citation_verification", []),
-                "citation_confidence": final_state.get("citation_confidence"),
-                # Phase 3 Milestone 4: same "always present" contract.
-                "risk_score": final_state.get("risk_score"),
-                "risk_level": final_state.get("risk_level"),
-                "identified_risks": final_state.get("identified_risks", []),
-                "evidence_gaps": final_state.get("evidence_gaps", []),
-                "conflicting_claims": final_state.get("conflicting_claims", []),
-                "recommended_follow_up_questions": final_state.get("recommended_follow_up_questions", []),
-            }))
+            queue.put_nowait(
+                sse(
+                    {
+                        "type": "done",
+                        "report": final_state.get("report", ""),
+                        "citations_used": used,
+                        "sources": sources_payload,
+                        "confidence": confidence,
+                        "follow_ups": follow_ups,
+                        "eval_scores": eval_scores,
+                        "rag_chunks": rag_chunks,
+                        "latency_ms": latency_ms,
+                        "session_id": session_id,
+                        # Phase 3 Milestone 3: [] / None when verification found
+                        # nothing to check or fell back gracefully — always
+                        # present so the frontend never needs an `in` check.
+                        "citation_verification": final_state.get("citation_verification", []),
+                        "citation_confidence": final_state.get("citation_confidence"),
+                        # Phase 3 Milestone 4: same "always present" contract.
+                        "risk_score": final_state.get("risk_score"),
+                        "risk_level": final_state.get("risk_level"),
+                        "identified_risks": final_state.get("identified_risks", []),
+                        "evidence_gaps": final_state.get("evidence_gaps", []),
+                        "conflicting_claims": final_state.get("conflicting_claims", []),
+                        "recommended_follow_up_questions": final_state.get(
+                            "recommended_follow_up_questions", []
+                        ),
+                    }
+                )
+            )
 
         except StreamAborted:
             # Milestone 1: client disconnected mid-synthesis. Nothing left
@@ -302,18 +494,53 @@ async def _run_research_stream(question: str, max_rounds: int) -> AsyncIterator[
         disconnect_event.set()
 
 
-@app.get("/api/research/stream")
+@app.get(
+    "/api/research/stream",
+    tags=["research"],
+    summary="Run the multi-agent research pipeline (Server-Sent Events)",
+    description=(
+        "Streams a live research run as Server-Sent Events: `progress` "
+        "messages per pipeline stage, `token` events as the report is "
+        "written (Milestone 1), and a final `done` event containing the "
+        "validated report plus citation verification (Milestone 3) and "
+        "risk analysis (Milestone 4). Not a JSON response — consume with "
+        "an EventSource client, not a plain HTTP client expecting one body."
+    ),
+)
 async def research_stream(
-    question: str = Query(..., min_length=3),
-    max_rounds: int = Query(2, ge=1, le=4),
+    question: str = Query(
+        ...,
+        min_length=3,
+        description="The research question to investigate.",
+        examples=["What are the latest advances in hybrid CNN-LSTM architectures for medical imaging?"],
+    ),
+    max_rounds: int = Query(
+        2,
+        ge=1,
+        le=4,
+        description="Max search-and-reflect rounds before forcing synthesis, regardless of reflection's sufficiency judgment.",
+    ),
 ):
     # #8: rate limit by a simple global key (single-instance deployment).
     # For multi-user production, swap "global" for request.client.host.
     try:
         check_rate_limit("global")
     except RateLimitExceeded as exc:
+        # Python deletes `exc` automatically at the end of this except
+        # block (it holds a traceback reference, so CPython clears it to
+        # avoid a reference cycle) — but error_stream() below is a
+        # generator that isn't actually iterated until StreamingResponse
+        # consumes it, which happens asynchronously *after* this function
+        # has already returned and `exc` is long gone. Capturing the
+        # message as a plain string here, before that deletion, is what
+        # makes this actually work instead of raising NameError the first
+        # time someone hits the rate limit (caught by adopting ruff in
+        # Phase 4 — see CI notes).
+        message = str(exc)
+
         async def error_stream():
-            yield sse({"type": "error", "message": str(exc)})
+            yield sse({"type": "error", "message": message})
+
         return StreamingResponse(error_stream(), media_type="text/event-stream")
 
     return StreamingResponse(
@@ -326,8 +553,23 @@ async def research_stream(
 # Debate stream
 # ---------------------------------------------------------------------------
 
-@app.get("/api/debate/stream")
-async def debate_stream(question: str = Query(..., min_length=3)):
+
+@app.get(
+    "/api/debate/stream",
+    tags=["debate"],
+    summary="Run a two-sided FOR/AGAINST debate pipeline (Server-Sent Events)",
+    description=(
+        "A separate, independent pipeline from /api/research/stream — see "
+        "SYSTEM_DESIGN.md for why debate.py doesn't reuse the Phase 3 "
+        "agent classes. Streams progress events, then a `done` event with "
+        "both sides' arguments and citations."
+    ),
+)
+async def debate_stream(
+    question: str = Query(
+        ..., min_length=3, examples=["Should social media platforms be regulated like utilities?"]
+    ),
+):
     async def generate():
         run_start = time.time()
         log_messages = []
@@ -343,7 +585,9 @@ async def debate_stream(question: str = Query(..., min_length=3)):
             sources_raw = result.get("sources", {})
             int_sources = {int(k): v for k, v in sources_raw.items()}
             used = result.get("citations_used", [])
-            eval_scores = await asyncio.to_thread(evaluate_report, question, result.get("report", ""), int_sources, used)
+            eval_scores = await asyncio.to_thread(
+                evaluate_report, question, result.get("report", ""), int_sources, used
+            )
 
             for k, s in sources_raw.items():
                 s["credibility"] = score_url(s.get("url", ""))
@@ -354,20 +598,35 @@ async def debate_stream(question: str = Query(..., min_length=3)):
             latency_ms = int((time.time() - run_start) * 1000)
 
             session_id = save_session(
-                question=question, report=result.get("report", ""),
-                sources=sources_raw, confidence=confidence, mode="debate",
-                follow_ups=follow_ups, eval_scores=eval_scores, latency_ms=latency_ms,
+                question=question,
+                report=result.get("report", ""),
+                sources=sources_raw,
+                confidence=confidence,
+                mode="debate",
+                follow_ups=follow_ups,
+                eval_scores=eval_scores,
+                latency_ms=latency_ms,
             )
-            store_memory(session_id=session_id, question=question,
-                         report_summary=result.get("report", ""), eval_scores=eval_scores)
+            store_memory(
+                session_id=session_id,
+                question=question,
+                report_summary=result.get("report", ""),
+                eval_scores=eval_scores,
+            )
 
-            yield sse({
-                "type": "done", "report": result.get("report", ""),
-                "sources": sources_raw, "citations_used": used,
-                "confidence": confidence, "follow_ups": follow_ups,
-                "eval_scores": eval_scores, "latency_ms": latency_ms,
-                "session_id": session_id,
-            })
+            yield sse(
+                {
+                    "type": "done",
+                    "report": result.get("report", ""),
+                    "sources": sources_raw,
+                    "citations_used": used,
+                    "confidence": confidence,
+                    "follow_ups": follow_ups,
+                    "eval_scores": eval_scores,
+                    "latency_ms": latency_ms,
+                    "session_id": session_id,
+                }
+            )
         except Exception as exc:
             logger.exception("Debate stream failed")
             yield sse({"type": "error", "message": str(exc)})
@@ -379,7 +638,8 @@ async def debate_stream(question: str = Query(..., min_length=3)):
 # PDF ingestion
 # ---------------------------------------------------------------------------
 
-@app.post("/api/docs/upload")
+
+@app.post("/api/docs/upload", tags=["documents"])
 async def upload_pdf(file: UploadFile = File(default=...)):
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files supported")
@@ -392,12 +652,12 @@ async def upload_pdf(file: UploadFile = File(default=...)):
     return result
 
 
-@app.get("/api/docs")
+@app.get("/api/docs", tags=["documents"])
 async def list_docs():
     return await asyncio.to_thread(list_ingested_docs)
 
 
-@app.delete("/api/docs/{doc_id}")
+@app.delete("/api/docs/{doc_id}", tags=["documents"])
 async def delete_document(doc_id: str):
     await asyncio.to_thread(delete_doc, doc_id)
     return {"ok": True}
@@ -407,21 +667,27 @@ async def delete_document(doc_id: str):
 # History
 # ---------------------------------------------------------------------------
 
-@app.get("/api/history")
+
+@app.get("/api/history", tags=["history"])
 async def list_history():
     rows = await asyncio.to_thread(get_history)
-    return [{
-        "id": r["id"], "question": r["question"],
-        "confidence": r["confidence"], "mode": r["mode"],
-        "eval_overall": r.get("eval_overall"),
-        "eval_grade": r.get("eval_grade"),
-        "rag_chunks_used": r.get("rag_chunks_used", 0),
-        "latency_ms": r.get("latency_ms", 0),
-        "created_at": r["created_at"],
-    } for r in rows]
+    return [
+        {
+            "id": r["id"],
+            "question": r["question"],
+            "confidence": r["confidence"],
+            "mode": r["mode"],
+            "eval_overall": r.get("eval_overall"),
+            "eval_grade": r.get("eval_grade"),
+            "rag_chunks_used": r.get("rag_chunks_used", 0),
+            "latency_ms": r.get("latency_ms", 0),
+            "created_at": r["created_at"],
+        }
+        for r in rows
+    ]
 
 
-@app.get("/api/history/{session_id}")
+@app.get("/api/history/{session_id}", tags=["history"])
 async def get_one(session_id: int):
     row = await asyncio.to_thread(get_session, session_id)
     if not row:
@@ -429,7 +695,7 @@ async def get_one(session_id: int):
     return row
 
 
-@app.delete("/api/history/{session_id}")
+@app.delete("/api/history/{session_id}", tags=["history"])
 async def delete_one(session_id: int):
     await asyncio.to_thread(delete_session, session_id)
     await asyncio.to_thread(delete_memory, session_id)
@@ -440,17 +706,18 @@ async def delete_one(session_id: int):
 # Metrics
 # ---------------------------------------------------------------------------
 
-@app.get("/api/metrics/runs")
+
+@app.get("/api/metrics/runs", tags=["metrics"])
 async def metrics_runs():
     return await asyncio.to_thread(get_run_metrics, 50)
 
 
-@app.get("/api/metrics/nodes/{run_id}")
+@app.get("/api/metrics/nodes/{run_id}", tags=["metrics"])
 async def metrics_nodes(run_id: int):
     return await asyncio.to_thread(get_node_breakdown, run_id)
 
 
-@app.get("/api/metrics/summary")
+@app.get("/api/metrics/summary", tags=["metrics"])
 async def metrics_summary():
     return await asyncio.to_thread(get_aggregate_stats)
 
@@ -459,12 +726,13 @@ async def metrics_summary():
 # #2: Tracing endpoints
 # ---------------------------------------------------------------------------
 
-@app.get("/api/traces")
+
+@app.get("/api/traces", tags=["metrics"])
 async def list_traces():
     return await asyncio.to_thread(get_recent_traces, 20)
 
 
-@app.get("/api/traces/{trace_id}")
+@app.get("/api/traces/{trace_id}", tags=["metrics"])
 async def get_trace_detail(trace_id: str):
     trace = await asyncio.to_thread(get_trace, trace_id)
     if not trace:
@@ -476,7 +744,8 @@ async def get_trace_detail(trace_id: str):
 # #8: Guardrail status endpoint
 # ---------------------------------------------------------------------------
 
-@app.get("/api/guardrails/status")
+
+@app.get("/api/guardrails/status", tags=["meta"])
 async def guardrails_status():
     return get_guardrail_status()
 
@@ -485,7 +754,8 @@ async def guardrails_status():
 # #7: Eval regression endpoints
 # ---------------------------------------------------------------------------
 
-@app.post("/api/eval/baseline")
+
+@app.post("/api/eval/baseline", tags=["evaluation"])
 async def set_baseline(body: dict):
     results = body.get("results", [])
     if not results:
@@ -494,7 +764,7 @@ async def set_baseline(body: dict):
     return {"version": version, "saved": len(results)}
 
 
-@app.post("/api/eval/check-regression")
+@app.post("/api/eval/check-regression", tags=["evaluation"])
 async def regression_check(body: dict):
     results = body.get("results", [])
     if not results:
@@ -502,7 +772,7 @@ async def regression_check(body: dict):
     return await asyncio.to_thread(check_regression, results)
 
 
-@app.get("/api/eval/baseline")
+@app.get("/api/eval/baseline", tags=["evaluation"])
 async def get_baseline():
     return await asyncio.to_thread(get_current_baseline)
 
@@ -511,17 +781,18 @@ async def get_baseline():
 # Benchmark
 # ---------------------------------------------------------------------------
 
-@app.get("/api/benchmark/questions")
+
+@app.get("/api/benchmark/questions", tags=["benchmark"])
 async def benchmark_questions(limit: int = Query(10, ge=1, le=30)):
     return get_benchmark_questions(limit)
 
 
-@app.get("/api/benchmark/results")
+@app.get("/api/benchmark/results", tags=["benchmark"])
 async def benchmark_results():
     return await asyncio.to_thread(get_benchmark_results)
 
 
-@app.post("/api/benchmark/run-baselines")
+@app.post("/api/benchmark/run-baselines", tags=["benchmark"])
 async def run_baselines(body: dict):
     question = body.get("question", "")
     if not question:
@@ -537,9 +808,31 @@ async def run_baselines(body: dict):
 # Health
 # ---------------------------------------------------------------------------
 
-@app.get("/api/health")
+# ---------------------------------------------------------------------------
+# Health & version
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/health", response_model=HealthResponse, tags=["meta"])
 async def health():
-    return {"status": "ok", "version": "2.0.0"}
+    return {"status": "ok", "version": APP_VERSION}
+
+
+@app.get("/api/version", response_model=VersionResponse, tags=["meta"])
+async def get_version():
+    """
+    Returns the running application version, the git commit it was built
+    from (Docker builds only — see Dockerfile's GIT_COMMIT build arg), the
+    Python interpreter version, and the compiled LangGraph's node list —
+    a quick way to confirm which pipeline stages (e.g. fact_verify,
+    risk_analyze) are actually active in a given deployment.
+    """
+    return {
+        "version": APP_VERSION,
+        "git_commit": os.environ.get("GIT_COMMIT", "unknown"),
+        "python_version": platform.python_version(),
+        "graph_nodes": list(_graph.nodes.keys()),
+    }
 
 
 # ---------------------------------------------------------------------------
