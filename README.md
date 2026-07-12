@@ -81,6 +81,15 @@ concurrent-fetch/dedup/credibility-sort logic). Full breakdown, including
   claim the source never actually made (existence ≠ truthfulness)
 - **Risk analysis** — a 0–100 reliability score, identified risks,
   evidence gaps, conflicting claims, and targeted follow-up questions
+- **Self-correcting revision** — removes or clearly marks unsupported
+  claims (including fabricated numbers and results tables) using the
+  fact-verification pass above, and prunes report sections (e.g.
+  "Experimental Results") the sources never actually supported — zero
+  extra LLM calls, pure deterministic post-processing
+- **IEEE-style References** with full (untruncated) titles, deduplicated
+  by URL, plus a separate "Sources Retrieved During Research" view
+  showing every source gathered — not just the ones cited — with
+  credibility, type, and cited/not-cited status
 - Debate mode — a separate FOR/AGAINST two-sided research pipeline
 
 **Engineering**
@@ -92,7 +101,7 @@ concurrent-fetch/dedup/credibility-sort logic). Full breakdown, including
 - Request-ID + timing middleware, structured (optional JSON) logging
 - SQLite with safe, tested schema migrations (no data loss across
   upgrades) — history, observability, and evaluation-regression tables
-- 80+ automated tests, CI-enforced (lint, format, test, Docker build +
+- 117+ automated tests, CI-enforced (lint, format, test, Docker build +
   smoke test) on every push
 
 ## Tech stack
@@ -110,12 +119,58 @@ concurrent-fetch/dedup/credibility-sort logic). Full breakdown, including
 | CI | GitHub Actions — Ruff, Black, Pytest, Docker build + smoke test |
 | Deployment | Docker / Docker Compose; guides for Render, Railway, Fly.io |
 
+## Demo
+
+The fastest way to see this working end to end:
+```bash
+make dev && make run
+```
+then open `http://localhost:8000` and ask something with a genuine
+evidence trail, e.g. *"What are recent advances in hybrid CNN-LSTM
+architectures for medical imaging?"* Watch for, in order: the report
+streaming in token-by-token, citation badges appearing with small
+colored verdict icons once fact-checking finishes, a Risk Analysis card
+with a Low/Medium/High badge, a Grounding card showing what (if
+anything) got removed or flagged, and — expand it — a "Sources Retrieved
+During Research" list showing every source the agent gathered, including
+ones it decided *not* to cite.
+
 ## Screenshots
 
-*(Placeholder — add screenshots of the live report view with citation
-badges, the risk-analysis panel, and the metrics/history sidebar here
-before sharing this repo publicly. `frontend/index.html` is a single
-static file if you want to run it locally and capture your own.)*
+*(No browser is available in the environment this project was built in,
+so these are accurate descriptions of the real, implemented UI rather
+than literal image files — capture your own from a local run before
+sharing this repo publicly; `frontend/index.html` is a single static
+file, so `File → Save As...` or your browser's screenshot tool is enough.)*
+
+**Report view.** Citation badges (`[1]`, `[2]`, ...) render inline with a
+small colored glyph next to the number — green check (supported), amber
+tilde (partially supported), red X (unsupported), gray question mark
+(couldn't verify) — with a hover tooltip showing the reasoning and
+confidence. The References section at the bottom uses IEEE-style
+formatting: `[1] "Full Untruncated Title," [Online]. Available: URL`.
+
+**Confidence and Citation Verification bars.** Two stacked indicators
+above the report: an overall confidence score (credibility-weighted), and
+a citation-verification score (`N claims checked`) once fact verification
+completes.
+
+**Risk Analysis card.** A colored score bar (green/amber/red for
+Low/Medium/High) with three labeled lists underneath — Identified Risks
+(amber left border), Evidence Gaps (blue), Conflicting Claims (red) — and
+clickable Recommended Follow-up Questions that re-run research with that
+question.
+
+**Grounding card.** A report-type badge (e.g. "Experimental Study" or
+"General Research Answer"), a grounding score, and counts of claims
+removed vs. annotated, with the removed claims themselves shown
+strikethrough for transparency.
+
+**Sources Retrieved During Research.** Expandable cards (native
+`<details>`, no extra JS needed to toggle), one per gathered source,
+sorted cited-first then by credibility — each shows a Cited/Not Cited
+badge, a Web/PDF badge, a credibility badge, the full URL, and — for
+cited sources — the fact-verification verdict.
 
 ## Installation
 
@@ -188,7 +243,15 @@ Example `done` SSE event (trimmed):
   "risk_score": 35,
   "risk_level": "Medium",
   "identified_risks": ["..."],
-  "recommended_follow_up_questions": ["..."]
+  "recommended_follow_up_questions": ["..."],
+  "report_type": "Experimental Study",
+  "claims_removed": [],
+  "final_grounding_score": 91,
+  "sources": {"1": {"title": "...", "url": "...", "credibility": 95, "cited": true}},
+  "all_sources": {
+    "1": {"title": "...", "url": "...", "credibility": 95, "source_type": "web", "cited": true},
+    "2": {"title": "...", "url": "...", "credibility": 50, "source_type": "web", "cited": false}
+  }
 }
 ```
 
@@ -206,6 +269,7 @@ methodology:
 | Fact-verification batching | 10x fewer LLM calls vs. one-call-per-claim |
 | Fact-verification caching | ~10,700x speedup on an identical repeat report |
 | PDF search overhead when no PDFs uploaded | 0.26ms/query (worst case, unconditional call) |
+| Self-correcting revision (claim removal, grounding, section pruning) | ~0.58ms average on a 50-sentence/20-citation report — zero LLM calls |
 
 ## Roadmap
 

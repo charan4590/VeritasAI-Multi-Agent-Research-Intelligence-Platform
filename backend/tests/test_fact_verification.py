@@ -114,7 +114,7 @@ class TestSupportedClaims:
         fake = FakeLLM([{"verdict": "supported", "confidence": 90, "reasoning": "ok"}])
         monkeypatch.setattr(fv_mod, "get_llm", lambda temperature=0.0: fake)
 
-        original_report = "The model achieves 94% accuracy [1].\n\n---\n\n**Sources**\n\n[1] Paper X — https://arxiv.org/abs/x"
+        original_report = "The model achieves 94% accuracy [1].\n\n---\n\n**References**\n\n[1] Paper X — https://arxiv.org/abs/x"
         state = _make_state_with_report(original_report, {1: SOURCE_1}, [1])
         result = FactVerificationAgent().run(state)
 
@@ -190,7 +190,7 @@ class TestMissingSourceText:
 
     def test_extract_claims_skips_sources_footer(self):
         report = (
-            "The model performs well [1].\n\n---\n\n**Sources**\n\n"
+            "The model performs well [1].\n\n---\n\n**References**\n\n"
             "[1] Paper X — https://arxiv.org/abs/x\n[99] Fake — https://example.com"
         )
         claims = _extract_claims(report, {1, 99})
@@ -251,7 +251,7 @@ class TestFallbackOnVerifierError:
 
         monkeypatch.setattr(fv_mod, "get_llm", broken_get_llm)
 
-        original_report = "The model achieves 94% accuracy [1].\n\n---\n\n**Sources**\n\n[1] Paper X — https://arxiv.org/abs/x"
+        original_report = "The model achieves 94% accuracy [1].\n\n---\n\n**References**\n\n[1] Paper X — https://arxiv.org/abs/x"
         state = _make_state_with_report(original_report, {1: SOURCE_1}, [1])
 
         result = FactVerificationAgent().run(state)

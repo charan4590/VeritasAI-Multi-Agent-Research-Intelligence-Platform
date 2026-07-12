@@ -72,6 +72,10 @@ def init_db():
                 claims_rewritten TEXT DEFAULT '[]',
                 unsupported_claims TEXT DEFAULT '[]',
                 final_grounding_score INTEGER DEFAULT NULL,
+                -- Phase 6: Sources Retrieved During Research (all
+                -- retrieved sources, not just cited ones -- sources
+                -- column above stays cited-only for backward compat)
+                all_sources TEXT DEFAULT '{}',
                 created_at TEXT DEFAULT (datetime('now'))
             )
         """)
@@ -90,6 +94,7 @@ def init_db():
         _ensure_column(conn, "history", "claims_rewritten", "TEXT DEFAULT '[]'")
         _ensure_column(conn, "history", "unsupported_claims", "TEXT DEFAULT '[]'")
         _ensure_column(conn, "history", "final_grounding_score", "INTEGER DEFAULT NULL")
+        _ensure_column(conn, "history", "all_sources", "TEXT DEFAULT '{}'")
         conn.commit()
 
 
@@ -116,6 +121,7 @@ def save_session(
     claims_rewritten: Optional[List[str]] = None,
     unsupported_claims: Optional[List[str]] = None,
     final_grounding_score: Optional[int] = None,
+    all_sources: Optional[Dict] = None,
 ) -> int:
     eval_scores = eval_scores or {}
     with get_conn() as conn:
@@ -130,8 +136,8 @@ def save_session(
                 risk_score, risk_level, identified_risks, evidence_gaps,
                 conflicting_claims, recommended_follow_up_questions,
                 report_type, claims_removed, claims_rewritten,
-                unsupported_claims, final_grounding_score
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                unsupported_claims, final_grounding_score, all_sources
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 question,
@@ -162,6 +168,7 @@ def save_session(
                 json.dumps(claims_rewritten or []),
                 json.dumps(unsupported_claims or []),
                 final_grounding_score,
+                json.dumps(all_sources or {}),
             ),
         )
         conn.commit()
@@ -180,6 +187,7 @@ def _decode_row(d: Dict) -> Dict:
     d["claims_removed"] = json.loads(d.get("claims_removed") or "[]")
     d["claims_rewritten"] = json.loads(d.get("claims_rewritten") or "[]")
     d["unsupported_claims"] = json.loads(d.get("unsupported_claims") or "[]")
+    d["all_sources"] = json.loads(d.get("all_sources") or "{}")
     return d
 
 

@@ -339,8 +339,8 @@ class TestCitationNumberingAndFooterRebuild:
         state = _make_state("q", report, sources, verification)
         result = RevisionAgent().run(state)
 
-        assert "[1] A" in result["report"]
-        assert "[2] B" not in result["report"]
+        assert '[1] "A,"' in result["report"]
+        assert '[2] "B,"' not in result["report"]
 
 
 class TestGroundingScore:

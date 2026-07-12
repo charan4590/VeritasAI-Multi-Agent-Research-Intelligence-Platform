@@ -151,6 +151,23 @@ header h1{font-family:var(--font-d);font-size:22px;margin-right:auto;}
 .gr-sublabel{font-family:var(--font-m);font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--soft);margin:10px 0 4px;}
 .gr-item{font-family:var(--font-b);font-size:12px;line-height:1.4;padding:6px 10px;margin-bottom:4px;border-radius:6px;border-left:3px solid var(--red);background:var(--red-bg);color:var(--soft);text-decoration:line-through;}
 
+/* Phase 6: Sources Retrieved During Research */
+#sourcesRetrieved{margin:20px 0;padding:14px;background:var(--raised);border:1px solid var(--rule);border-radius:8px;}
+#sourcesRetrieved .sr-label{font-family:var(--font-m);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--soft);margin-bottom:10px;display:block;}
+.sr-card{border:1px solid var(--rule);border-radius:6px;margin-bottom:8px;background:var(--paper);overflow:hidden;}
+.sr-card summary{list-style:none;cursor:pointer;padding:10px 12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.sr-card summary::-webkit-details-marker{display:none;}
+.sr-card summary::before{content:'▸';color:var(--soft);font-size:11px;transition:transform .15s;}
+.sr-card[open] summary::before{transform:rotate(90deg);}
+.sr-title{font-family:var(--font-b);font-size:13px;color:var(--ink);flex:1;min-width:120px;}
+.sr-badge{font-family:var(--font-m);font-size:10px;font-weight:700;padding:2px 7px;border-radius:999px;border:1px solid;white-space:nowrap;}
+.sr-badge-cited{color:var(--green);border-color:var(--green);background:var(--green-bg);}
+.sr-badge-uncited{color:var(--soft);border-color:var(--rule);background:var(--paper);}
+.sr-badge-type{color:var(--blue);border-color:var(--blue);background:var(--blue-bg);}
+.sr-body{padding:0 12px 12px;font-family:var(--font-b);font-size:12px;color:var(--soft);}
+.sr-body a{color:var(--blue);word-break:break-all;}
+.sr-verdict{margin-top:6px;font-size:11px;}
+
 /* FOLLOW-UPS */
 #followUps{margin:16px 0;}
 #followUps .fu-label{font-family:var(--font-m);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--soft);margin-bottom:8px;}
@@ -303,6 +320,10 @@ header h1{font-family:var(--font-d);font-size:22px;margin-right:auto;}
           <div class="gr-stats" id="grStats"></div>
           <div id="grRemoved"></div>
         </div>
+        <div id="sourcesRetrieved" style="display:none">
+          <span class="sr-label">Sources Retrieved During Research</span>
+          <div id="srCards"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -443,6 +464,7 @@ function startResearch() {
   document.getElementById('followUps').style.display = 'none';
   document.getElementById('riskAnalysis').style.display = 'none';
   document.getElementById('grounding').style.display = 'none';
+  document.getElementById('sourcesRetrieved').style.display = 'none';
   document.getElementById('submitBtn').disabled = true;
   setStatus('planning', 'active');
 
@@ -486,6 +508,7 @@ function startResearch() {
       showFollowUps(data.follow_ups || []);
       showRiskAnalysis(data);
       showGrounding(data);
+      showSourcesRetrieved(data);
       document.getElementById('reportActions').style.display = 'flex';
       setStatus('done', 'done');
       document.getElementById('submitBtn').disabled = false;
@@ -525,6 +548,7 @@ function newResearch() {
   document.getElementById('followUps').style.display = 'none';
   document.getElementById('riskAnalysis').style.display = 'none';
   document.getElementById('grounding').style.display = 'none';
+  document.getElementById('sourcesRetrieved').style.display = 'none';
   document.getElementById('log').innerHTML = '';
 
   setStatus('idle', '');
@@ -751,6 +775,54 @@ function showGrounding(data) {
   }
 }
 
+// ---- Sources Retrieved During Research (Phase 6) ----
+function showSourcesRetrieved(data) {
+  const el = document.getElementById('sourcesRetrieved');
+  const all = data.all_sources || {};
+  const ids = Object.keys(all);
+  if (!ids.length) {
+    el.style.display = 'none';
+    return;
+  }
+  el.style.display = 'block';
+
+  // Cited sources first, then by credibility descending -- surfaces the
+  // evidence that actually made it into the report before the rest.
+  ids.sort((a, b) => {
+    const sa = all[a], sb = all[b];
+    if (sa.cited !== sb.cited) return sa.cited ? -1 : 1;
+    return (sb.credibility || 0) - (sa.credibility || 0);
+  });
+
+  document.getElementById('srCards').innerHTML = ids.map(id => {
+    const s = all[id];
+    const citedBadge = s.cited
+      ? '<span class="sr-badge sr-badge-cited">Cited [' + id + ']</span>'
+      : '<span class="sr-badge sr-badge-uncited">Not cited</span>';
+    const typeBadge = s.source_type === 'pdf'
+      ? '<span class="sr-badge sr-badge-type">PDF</span>'
+      : '<span class="sr-badge sr-badge-type">Web</span>';
+    const credStyle = getCredColor(s.credibility_label);
+    const credBadge = `<span class="sr-badge" style="${credStyle}">${s.credibility_label} (${s.credibility})</span>`;
+
+    const verdict = citationVerification[String(id)];
+    const verdictHtml = (s.cited && verdict)
+      ? `<div class="sr-verdict">${getVerifyIcon(id)} Fact-check: ${verdict.verdict.replace('_', ' ')} (${verdict.confidence}% confidence)</div>`
+      : '';
+
+    return `<details class="sr-card">
+      <summary>
+        <span class="sr-title">${escHtml(s.title)}</span>
+        ${citedBadge}${typeBadge}${credBadge}
+      </summary>
+      <div class="sr-body">
+        <a href="${escHtml(s.url)}" target="_blank" rel="noopener">${escHtml(s.url)}</a>
+        ${verdictHtml}
+      </div>
+    </details>`;
+  }).join('');
+}
+
 // ---- Source drawer (Feature 4) ----
 function openSource(id) {
   const s = sources[id] || sources[String(id)];
@@ -814,6 +886,7 @@ async function loadSession(id) {
     showFollowUps(row.follow_ups || []);
     showRiskAnalysis(row);
     showGrounding(row);
+    showSourcesRetrieved(row);
     document.getElementById('reportActions').style.display = 'flex';
     document.getElementById('log').innerHTML = '<p class="log-placeholder">Loaded from history</p>';
     setStatus('done', 'done');

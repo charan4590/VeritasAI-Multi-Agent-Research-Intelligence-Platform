@@ -32,6 +32,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from ..reflection import ACADEMIC_REQUIRED_SIGNALS
 from ..state import AgentState
 from .base import Agent
+from .citation import format_ieee_reference
 from .fact_verification import (
     CITATION_RE,
     NO_CITATIONS_FOOTER_MARKER,
@@ -402,7 +403,20 @@ class RevisionAgent(Agent):
         if not final_citations_used:
             return body + NO_CITATIONS_FOOTER_MARKER
 
-        refs = "\n".join(f"[{i}] {sources[i]['title']} — {sources[i]['url']}" for i in final_citations_used)
+        # Same defensive URL dedup as CitationAgent's initial References
+        # section (see citation.py) -- belt-and-suspenders here since
+        # this is a second, independent place a References list gets
+        # built, after revision may have changed which citations survive.
+        seen_urls = set()
+        deduped_ids = []
+        for i in final_citations_used:
+            url = sources[i].get("url", "")
+            if url in seen_urls:
+                continue
+            seen_urls.add(url)
+            deduped_ids.append(i)
+
+        refs = "\n".join(format_ieee_reference(i, sources[i]) for i in deduped_ids)
         return body + f"{SOURCES_FOOTER_MARKER}\n\n{refs}"
 
     @staticmethod

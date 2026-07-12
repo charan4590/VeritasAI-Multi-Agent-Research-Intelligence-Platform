@@ -108,7 +108,7 @@ from db import delete_session, get_history, get_session, init_db, save_session
 # /api/version both read this instead of each hard-coding their own
 # (previously /api/health hard-coded "2.0.0" independently; that's the
 # kind of drift a single constant exists to prevent).
-APP_VERSION = "3.5.0"  # Phase 5 (Grounded Report Generation / RevisionAgent) complete
+APP_VERSION = "3.6.0"  # Phase 6 (IEEE References, Sources Retrieved, final polish) complete
 
 
 class HealthResponse(BaseModel):
@@ -367,6 +367,27 @@ async def _run_research_stream(question: str, max_rounds: int) -> AsyncIterator[
                 if i in latest_sources
             }
 
+            # Phase 6 (final polish): "Sources Retrieved During Research" —
+            # every source the search stage actually gathered, not just
+            # the ones that survived into a citation. sources_payload
+            # above is deliberately left untouched (cited-only, same
+            # shape as always) for backward compatibility; this is a new,
+            # separate, additive field. cited=False here commonly means
+            # "retrieved but not needed for this answer" rather than
+            # "bad source" — reflection/RAG routinely gather more evidence
+            # than synthesis ends up citing.
+            all_sources_payload = {
+                str(i): {
+                    "title": s["title"],
+                    "url": s["url"],
+                    "credibility": score_url(s["url"]),
+                    "credibility_label": score_label(score_url(s["url"])),
+                    "source_type": s.get("source_type", "web"),
+                    "cited": i in used,
+                }
+                for i, s in latest_sources.items()
+            }
+
             _intent = _detect_research_intent(question)
             if _intent == "academic":
                 confidence = compute_research_confidence(latest_sources, used, final_state.get("report", ""))
@@ -424,6 +445,8 @@ async def _run_research_stream(question: str, max_rounds: int) -> AsyncIterator[
                 claims_rewritten=final_state.get("claims_rewritten", []),
                 unsupported_claims=final_state.get("unsupported_claims", []),
                 final_grounding_score=final_state.get("final_grounding_score"),
+                # Phase 6 (final polish)
+                all_sources=all_sources_payload,
             )
 
             store_memory(
@@ -468,6 +491,10 @@ async def _run_research_stream(question: str, max_rounds: int) -> AsyncIterator[
                         "claims_rewritten": final_state.get("claims_rewritten", []),
                         "unsupported_claims": final_state.get("unsupported_claims", []),
                         "final_grounding_score": final_state.get("final_grounding_score"),
+                        # Phase 6 (final polish): every retrieved source
+                        # with cited/not-cited status, for the frontend's
+                        # "Sources Retrieved During Research" section.
+                        "all_sources": all_sources_payload,
                     }
                 )
             )

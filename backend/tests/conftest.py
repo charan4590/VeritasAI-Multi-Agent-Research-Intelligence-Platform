@@ -49,9 +49,9 @@ The future looks promising [3].
 
 ---
 
-**Sources**
+**References**
 
-[1] AI Paper — https://arxiv.org/abs/123
-[2] BBC AI News — https://bbc.com/news/ai
-[3] Blog Post — https://example.com/blog
+[1] "AI Paper," [Online]. Available: https://arxiv.org/abs/123
+[2] "BBC AI News," [Online]. Available: https://bbc.com/news/ai
+[3] "Blog Post," [Online]. Available: https://example.com/blog
 """

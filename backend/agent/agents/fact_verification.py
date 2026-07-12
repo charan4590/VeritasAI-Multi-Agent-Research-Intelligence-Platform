@@ -58,7 +58,7 @@ CITATION_RE = re.compile(r"\[(\d+)\]")
 # applied here to the report body instead of source snippets.
 SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z\[])")
 
-SOURCES_FOOTER_MARKER = "\n\n---\n\n**Sources**"
+SOURCES_FOOTER_MARKER = "\n\n---\n\n**References**"  # Phase 6: renamed from "Sources" to an IEEE-style "References" heading (see citation.py)
 NO_CITATIONS_FOOTER_MARKER = "\n\n---\n\n*No verifiable citations produced.*"
 
 

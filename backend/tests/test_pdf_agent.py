@@ -210,8 +210,8 @@ class TestCitationLabeling:
 
         result = CitationAgent().run(state)
 
-        assert "[1] Web Paper" in result["report"]
-        assert "[2] [PDF] doc.pdf (p.1)" in result["report"]
+        assert '[1] "Web Paper,"' in result["report"]
+        assert '[2] [PDF] "doc.pdf (p.1),"' in result["report"]
         assert result["citations_used"] == [1, 2]
 
     def test_pdf_citation_count_in_log(self):
