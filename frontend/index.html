@@ -180,8 +180,10 @@ header h1{font-family:var(--font-d);font-size:22px;margin-right:auto;}
 .action-btn:hover{background:var(--paper);}
 
 /* CITATION BADGE */
-.cite{font-family:var(--font-m);font-size:10px;width:18px;height:18px;display:inline-flex;align-items:center;justify-content:center;border-radius:50%;border:1px solid var(--blue);background:var(--blue-bg);color:var(--blue);cursor:pointer;vertical-align:middle;margin:0 1px;}
+.cite{font-family:var(--font-m);font-size:10px;min-width:18px;height:18px;padding:0 5px;display:inline-flex;align-items:center;justify-content:center;gap:3px;border-radius:999px;border:1px solid var(--blue);background:var(--blue-bg);color:var(--blue);cursor:pointer;vertical-align:middle;margin:0 1px;max-width:200px;overflow:hidden;line-height:1;}
 .cite:hover{background:var(--blue);color:var(--paper);}
+.cite-num{flex:0 0 auto;}
+.cite-title{font-family:var(--font-b);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;}
 
 /* SOURCE DRAWER */
 #drawer{position:fixed;left:0;right:0;bottom:0;transform:translateY(100%);transition:transform .25s;background:var(--raised);border-top:1px solid var(--rule);box-shadow:0 -8px 24px rgba(0,0,0,.1);padding:20px 24px 28px;border-radius:10px 10px 0 0;max-width:860px;margin:0 auto;}
@@ -200,10 +202,31 @@ header h1{font-family:var(--font-d);font-size:22px;margin-right:auto;}
 /* PRINT STYLES — PDF export */
 @media print{
   #loginScreen,#sidebar,#toolbar,header,#log,.pane:first-child,#reportActions,#followUps,#confidenceBar,#drawer{display:none!important;}
-  #content{display:block;}
-  #reportPane{border:none;padding:0;}
+  /* Bug fix: the base layout is a fixed-viewport scrolling SPA
+     (body{height:100vh;overflow:hidden}, .pane{overflow-y:auto}) --
+     without resetting these for print, the browser's print engine can
+     only capture whatever fits in one clipped, on-screen viewport
+     height, producing a single squished page instead of a properly
+     paginated multi-page PDF regardless of how long the report is. */
+  html,body{height:auto!important;overflow:visible!important;}
+  #content{display:block!important;height:auto!important;overflow:visible!important;}
+  .pane{overflow:visible!important;height:auto!important;padding:0;}
+  #reportPane{border:none;padding:0;overflow:visible!important;}
+  #reportWrap{overflow:visible!important;}
   body{background:white;color:black;}
   .cite{border:1px solid #333;background:#eee;color:#333;}
+  /* Interactive-only chrome that means nothing on paper (buttons meant
+     to re-run research) -- keep the actual Risk Analysis / Grounding /
+     Sources Retrieved *content* since that's substantive report data,
+     not UI chrome, just drop the clickable follow-up question buttons. */
+  .ra-fu-btn,.fu-btn{display:none!important;}
+  /* Avoid an expandable source card getting visually cut in half across
+     a page boundary. */
+  .sr-card,.ra-item,.gr-item{page-break-inside:avoid;}
+  /* <details> without the open attribute hides its content by default
+     -- force everything visible on paper rather than printing only the
+     collapsed summary line. */
+  details,details>*{display:block!important;}
 }
 
 @media(max-width:800px){
@@ -596,13 +619,22 @@ function queueStreamRender() {
 }
 
 function renderReport(md) {
+  // Bug fix: this MUST be a single line of HTML with no embedded
+  // newlines. GFM markdown table rows are required to be exactly one
+  // line; when a citation marker like [4] sits inside a table cell and
+  // this string (injected before marked.parse() runs) contained literal
+  // "\n" characters, marked's table tokenizer saw a "row" spanning
+  // multiple lines, failed to parse it as a table row at all, and fell
+  // back to emitting the raw tag text -- visible as literal
+  // "</button>" and "<span class=\"cite-num\">" text leaking into
+  // rendered tables. Found via a real run with citations inside a
+  // results table, not caught by any earlier test (none exercised a
+  // citation marker inside a markdown table cell).
   const withBadges = md.replace(/\[(\d+)\]/g, (_, n) => {
     const s = sources[n] || sources[String(n)];
     const shortTitle = s ? getShortTitle(s.title) : '';
     const credColor = s ? getCredColor(s.credibility_label) : '';
-    return `<button type="button" class="cite" style="${credColor}" onclick="openSource(${n})">
-      <span class="cite-num">${n}</span>${getVerifyIcon(n)}${shortTitle ? `<span class="cite-title">${escHtml(shortTitle)}</span>` : ''}
-    </button>`;
+    return `<button type="button" class="cite" style="${credColor}" onclick="openSource(${n})"><span class="cite-num">${n}</span>${getVerifyIcon(n)}${shortTitle ? `<span class="cite-title">${escHtml(shortTitle)}</span>` : ''}</button>`;
   });
   document.getElementById('reportWrap').innerHTML = marked.parse(withBadges);
 }

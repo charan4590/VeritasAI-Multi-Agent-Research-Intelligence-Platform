@@ -55,6 +55,8 @@ logger = logging.getLogger(__name__)
 
 CITATION_RE = re.compile(r"\[(\d+)\]")
 YEAR_RE = re.compile(r"\b(19[8-9]\d|20[0-3]\d)\b")
+NUMBER_RE = re.compile(r"\b\d+(?:\.\d+)?%?\b")
+TABLE_SEPARATOR_RE = re.compile(r"^\|[\s:\-|]+\|$")
 
 # Thresholds checked high-to-low; first match wins.
 _RISK_LEVEL_THRESHOLDS = [(67, "High"), (34, "Medium"), (0, "Low")]
@@ -137,11 +139,49 @@ def _recency_signal(sources: Dict) -> Tuple[bool, Optional[int]]:
     return (current_year - most_recent) <= 5, most_recent
 
 
+def _count_ungrounded_table_rows(report: str, sources: Dict) -> int:
+    """
+    Coarse pre-check for fabricated numeric figures in markdown tables.
+
+    This exists because citation_verification (Milestone 3,
+    fact_verification.py) only ever evaluates PROSE SENTENCES —
+    FactVerificationAgent's claim extraction explicitly skips any
+    paragraph starting with "|" or "#" (tables and headers), since a
+    table row isn't a "sentence" its regex can meaningfully split. That
+    means a report with a fully fabricated results table (e.g. an
+    invented 96.7% accuracy / 0.98 AUC row) previously scored as
+    low-risk here even though RevisionAgent's later, more precise
+    strict-grounding pass (revision.py) would flag every figure in it —
+    risk_analyze ran *before* revise in the pipeline, so it never saw
+    that signal. Found via a real run, not a synthetic test.
+
+    Deliberately coarser than revision.py's per-citation table check (no
+    per-cell attribution, just "does this row contain a number that
+    appears nowhere in any source") — good enough for a risk *signal*;
+    precise removal/marking is still revision's job, not this one's.
+    """
+    if not report or not sources:
+        return 0
+    all_source_text = " ".join(s.get("snippet", "") for s in sources.values())
+    ungrounded = 0
+    for line in report.split("\n"):
+        stripped = line.strip()
+        if not (stripped.startswith("|") and stripped.endswith("|")):
+            continue
+        if TABLE_SEPARATOR_RE.match(stripped):
+            continue
+        numbers = NUMBER_RE.findall(CITATION_RE.sub("", stripped))
+        if numbers and not all(n in all_source_text for n in numbers):
+            ungrounded += 1
+    return ungrounded
+
+
 def _compute_risk_signals(state: AgentState) -> Dict[str, Any]:
     """Pure function of `state` — no LLM calls, no I/O, fully deterministic
     and independently testable without mocking anything."""
     question = state.get("question", "")
     sources = state.get("sources", {})
+    report = state.get("report", "")
     citation_verification = state.get("citation_verification") or []
     retrieved_chunks = state.get("retrieved_chunks") or []
 
@@ -221,6 +261,15 @@ def _compute_risk_signals(state: AgentState) -> Dict[str, Any]:
                 f"The most recent evidence found appears to be from "
                 f"{most_recent_year} — findings may be outdated."
             )
+
+    # --- fabricated/ungrounded table figures (see _count_ungrounded_table_rows) ---
+    ungrounded_rows = _count_ungrounded_table_rows(report, sources)
+    if ungrounded_rows:
+        score += min(30, 15 * ungrounded_rows)
+        identified_risks.append(
+            f"{ungrounded_rows} table row(s) contain figures that do not appear in any "
+            "retrieved source — may be fabricated."
+        )
 
     score = min(100, score)
     return {

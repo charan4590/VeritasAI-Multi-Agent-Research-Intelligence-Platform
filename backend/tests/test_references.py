@@ -58,6 +58,54 @@ class TestCitationAgentUsesIEEEFormat:
         refs_section = result["report"].split("**References**")[1]
         assert refs_section.count("https://x.com/a") == 1
 
+    def test_llm_generated_references_section_stripped(self):
+        """Regression test for a real bug found in production: the
+        academic synthesis prompt asks the model to write its own
+        "## 9. References" section, which -- left alone -- produces two
+        disagreeing References sections once this agent appends its own
+        validated one. Also confirms the model's own reference-list
+        numbers (e.g. "[2] Some other paper...") don't get miscounted as
+        real citations to source 2."""
+        report = (
+            "## 8. Limitations\n\n"
+            "Our proposed method has several limitations [1].\n\n"
+            "## 9. References\n\n"
+            "[1] Transfer learning based deep architecture for lung cancer "
+            "classification | Scientific Reports https://www.nature.com/articles/fake\n"
+            "[2] Deep Learning-Based Lung Cancer Detection https://ieeexplore.ieee.org/document/fake"
+        )
+        sources = {
+            1: _source(
+                1,
+                "https://www.nature.com/articles/fake",
+                "Transfer learning based deep architecture",
+                "supports",
+            ),
+        }
+        state = initial_state("q")
+        state["report"] = report
+        state["sources"] = sources
+        result = CitationAgent().run(state)
+
+        assert "## 9. References" not in result["report"]
+        assert result["report"].count("**References**") == 1
+        assert "Limitations" in result["report"]
+        # The model's own "[2] ..." reference-list line must NOT be
+        # miscounted as a real citation to a (non-existent) source 2.
+        assert result["citations_used"] == [1]
+
+    def test_no_references_section_is_a_noop(self):
+        """Most reports (general/technical intent) never had a
+        model-generated References section at all -- confirms stripping
+        logic doesn't touch anything when there's nothing to strip."""
+        report = "A claim [1]."
+        state = initial_state("q")
+        state["report"] = report
+        state["sources"] = {1: _source(1, "https://x.com/a", "Paper A", "s")}
+        result = CitationAgent().run(state)
+        assert "A claim" in result["report"]
+        assert result["citations_used"] == [1]
+
 
 class TestRevisionAgentPreservesIEEEFormat:
     def test_rebuilt_footer_uses_ieee_format(self):

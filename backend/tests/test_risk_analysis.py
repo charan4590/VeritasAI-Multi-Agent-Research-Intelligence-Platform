@@ -132,6 +132,68 @@ class TestContradictorySources:
         assert signals["conflicting_claims"] == []
 
 
+class TestFabricatedTableFigures:
+    """Regression tests for a real bug found in production: risk_score
+    stayed at 0 (falsely "Low Risk") for a report whose Experimental
+    Results table was entirely fabricated, because citation_verification
+    (Milestone 3) only ever evaluates prose sentences -- table rows are
+    explicitly skipped by FactVerificationAgent's claim extraction -- and
+    RevisionAgent's more precise per-cell grounding check runs *after*
+    risk_analyze in the pipeline, too late to inform this score."""
+
+    def test_fabricated_table_raises_risk_score(self):
+        sources = {
+            4: _source(
+                4,
+                "https://arxiv.org/abs/x",
+                "Deep Learning Techniques for Lung Cancer Diagnosis",
+                "A systematic review of deep learning techniques for lung cancer diagnosis with CT imaging.",
+            ),
+            5: _source(
+                5,
+                "https://frontiersin.org/y",
+                "Evaluation of lightweight architectures",
+                "We evaluate lightweight architectures for lung cancer CT classification.",
+            ),
+        }
+        report = (
+            "## 6. Experimental Results\n\n"
+            "We evaluate our proposed model [4] and [5].\n\n"
+            "| Method | Dataset | Accuracy | AUC | Sensitivity | Specificity |\n"
+            "|-|-|-|-|-|-|\n"
+            "| Proposed method | LIDC-IDRI | 95% | 0.95 | 90% | 95% |\n"
+            "| Proposed method | ELCAP | 92% | 0.92 | 85% | 92% |\n"
+        )
+        state = _make_state("lung cancer detection", sources, report, citations_used=[4, 5])
+        # citation_verification deliberately empty -- table rows were
+        # never covered, which is exactly the scenario that produced a
+        # falsely-0 risk score before this fix.
+        state["citation_verification"] = []
+
+        signals = _compute_risk_signals(state)
+
+        assert signals["risk_score"] > 0
+        assert any("table row" in r.lower() for r in signals["identified_risks"])
+
+    def test_grounded_table_does_not_raise_risk_score(self):
+        sources = {
+            1: _source(
+                1, "https://x.com/a", "Paper A", "Our method achieves 94.2% accuracy on the benchmark."
+            )
+        }
+        report = "## Results\n\n" "| Method | Accuracy |\n" "|-|-|\n" "| Ours | 94.2% |\n"
+        state = _make_state("q", sources, report, citations_used=[1])
+        state["citation_verification"] = []
+
+        signals = _compute_risk_signals(state)
+
+        assert not any("table row" in r.lower() for r in signals["identified_risks"])
+
+    def test_no_report_no_crash(self):
+        signals = _compute_risk_signals(_make_state("q", {}, "", citations_used=[]))
+        assert signals["risk_score"] == 0
+
+
 class TestWeakEvidence:
     def test_few_rag_chunks_flagged_as_evidence_gap(self):
         sources = {
