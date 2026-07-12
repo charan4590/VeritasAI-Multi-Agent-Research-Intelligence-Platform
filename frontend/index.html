@@ -102,11 +102,20 @@ header h1{font-family:var(--font-d);font-size:22px;margin-right:auto;}
 #reportWrap h1,#reportWrap h2,#reportWrap h3{font-family:var(--font-d);font-weight:600;margin:20px 0 8px;}
 #reportWrap h1{font-size:22px;}#reportWrap h2{font-size:18px;}#reportWrap h3{font-size:15px;}
 #reportWrap p{margin-bottom:12px;font-size:15px;}
-#reportWrap ul,#reportWrap ol{margin:0 0 12px 20px;}
-#reportWrap li{margin-bottom:4px;font-size:15px;}
+#reportWrap ul,#reportWrap ol{margin:0 0 14px 22px;}
+#reportWrap li{margin-bottom:10px;font-size:15px;line-height:1.5;}
+#reportWrap li>strong:first-child{display:inline-block;margin-bottom:2px;}
 #reportWrap hr{border:none;border-top:1px solid var(--rule);margin:20px 0;}
 #reportWrap strong{color:var(--ink);}
 #reportWrap blockquote{border-left:3px solid var(--blue);padding-left:14px;color:var(--soft);font-style:italic;margin:12px 0;}
+/* Bug fix: was completely unstyled -- no visible table structure at
+   all, and (more importantly) zero cell padding meant no rendered gap
+   between adjacent cells, so PDF text extraction / copy-paste merged
+   them with no space (e.g. "Our ModelHAM1000094%"). */
+#reportWrap table{width:100%;border-collapse:collapse;margin:12px 0 16px;font-size:13px;}
+#reportWrap th,#reportWrap td{border:1px solid var(--rule);padding:7px 10px;text-align:left;vertical-align:top;}
+#reportWrap th{background:var(--raised);font-family:var(--font-m);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.03em;}
+#reportWrap tr:nth-child(even) td{background:var(--raised);}
 
 /* CONFIDENCE */
 #confidenceBar{margin:16px 0;padding:14px;background:var(--raised);border:1px solid var(--rule);border-radius:8px;}
@@ -222,7 +231,7 @@ header h1{font-family:var(--font-d);font-size:22px;margin-right:auto;}
   .ra-fu-btn,.fu-btn{display:none!important;}
   /* Avoid an expandable source card getting visually cut in half across
      a page boundary. */
-  .sr-card,.ra-item,.gr-item{page-break-inside:avoid;}
+  .sr-card,.ra-item,.gr-item,#reportWrap tr{page-break-inside:avoid;}
   /* <details> without the open attribute hides its content by default
      -- force everything visible on paper rather than printing only the
      collapsed summary line. */
