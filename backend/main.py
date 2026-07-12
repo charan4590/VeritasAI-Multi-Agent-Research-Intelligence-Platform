@@ -108,7 +108,7 @@ from db import delete_session, get_history, get_session, init_db, save_session
 # /api/version both read this instead of each hard-coding their own
 # (previously /api/health hard-coded "2.0.0" independently; that's the
 # kind of drift a single constant exists to prevent).
-APP_VERSION = "3.6.2"  # Bugfix: report table/list styling, Limitations depth
+APP_VERSION = "3.6.3"  # Fix: Proposed Method/Model Architecture prompt reframed to synthesize, not invent
 
 
 class HealthResponse(BaseModel):
