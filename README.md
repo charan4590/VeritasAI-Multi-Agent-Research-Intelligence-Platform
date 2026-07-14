@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Research Agent — Enterprise AI Research Intelligence Platform
 
 A supervisor-orchestrated multi-agent research system that plans its own
@@ -296,3 +297,7 @@ methodology:
 ## License
 
 MIT
+=======
+# VeritasAI-Multi-Agent-Research-Intelligence-Platform
+ VeritasAI is a production-ready multi-agent research intelligence platform that autonomously plans research tasks, retrieves information from web and academic sources, performs RAG-based reasoning, verifies citations and factual claims, and generates grounded research reports
+>>>>>>> f9bf44d11ec0f25d122e8b1b7029bf83c76d2a67
