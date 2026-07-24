@@ -34,6 +34,23 @@ TOP_K = int(os.environ.get("RAG_TOP_K", "8"))
 _chroma_client = None
 _collections: Dict[str, object] = {}
 
+# Last indexing/embedding failure reason, surfaced by RAGAgent into the
+# activity log instead of a bare "RAG: unavailable" — embeddings always
+# go through Ollama's /api/embeddings regardless of which provider (Groq/
+# Gemini/Ollama) is selected for chat, so this is usually either "Ollama
+# isn't running" or "the EMBED_MODEL (nomic-embed-text) hasn't been
+# pulled" (`ollama pull nomic-embed-text`).
+_last_rag_error: Optional[str] = None
+
+
+def get_last_rag_error() -> Optional[str]:
+    return _last_rag_error
+
+
+def _set_last_rag_error(msg: Optional[str]) -> None:
+    global _last_rag_error
+    _last_rag_error = msg
+
 
 def _get_chroma():
     global _chroma_client
@@ -94,9 +111,33 @@ def embed_text(text: str) -> Optional[List[float]]:
         embedding = resp.json().get("embedding")
         if embedding:
             cache.set(cache_key, embedding)
+            _set_last_rag_error(None)
+        else:
+            _set_last_rag_error(
+                f"Ollama returned no embedding vector for model '{EMBED_MODEL}' — "
+                f"has it been pulled? Run: ollama pull {EMBED_MODEL}"
+            )
         return embedding
+    except requests.exceptions.ConnectionError as exc:
+        msg = f"Can't reach Ollama at {OLLAMA_BASE} — is `ollama serve` running? ({exc})"
+        print(f"[rag] embedding failed: {msg}")
+        _set_last_rag_error(msg)
+        return None
+    except requests.exceptions.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else "?"
+        if status == 404:
+            msg = (
+                f"Ollama doesn't have embedding model '{EMBED_MODEL}' pulled — "
+                f"run: ollama pull {EMBED_MODEL}"
+            )
+        else:
+            msg = f"Ollama embeddings request failed ({status}): {exc}"
+        print(f"[rag] embedding failed: {msg}")
+        _set_last_rag_error(msg)
+        return None
     except Exception as exc:
         print(f"[rag] embedding failed: {exc}")
+        _set_last_rag_error(str(exc))
         return None
 
 
@@ -239,6 +280,7 @@ def index_sources(sources: Dict, session_id: str) -> bool:
             all_chunks.extend(chunk_source(src))
 
         if not all_chunks:
+            _set_last_rag_error("No sources to index (search returned 0 sources this session)")
             return False
 
         # Cap total chunks embedded — with 20 sources at ~5 chunks each
@@ -275,6 +317,7 @@ def index_sources(sources: Dict, session_id: str) -> bool:
 
     except Exception as exc:
         print(f"[rag] indexing failed: {exc}")
+        _set_last_rag_error(str(exc))
         return False
 
 

@@ -71,6 +71,40 @@ TIER_2 = {
     "huggingface.co",
     "kaggle.com",
     "towardsdatascience.com",
+    # Bug fix: this list was entirely academic/tech-and-news, so a
+    # perfectly legitimate general-interest question (e.g. "top 10 car
+    # engines produced between 1990 and 2000") had every one of its real,
+    # authoritative sources fall through to the generic 50/"Low" default
+    # below purely because their domain wasn't on the list — not because
+    # the sources were actually low quality. Added recognized authorities
+    # for a handful of other common everyday research categories so
+    # confidence scoring isn't implicitly academic-topics-only.
+    # Automotive
+    "caranddriver.com",
+    "motortrend.com",
+    "edmunds.com",
+    "autoblog.com",
+    "roadandtrack.com",
+    "topgear.com",
+    "autoweek.com",
+    "hagerty.com",
+    "motor1.com",
+    "autoevolution.com",
+    # General reference / explainers
+    "history.com",
+    "howstuffworks.com",
+    "smithsonianmag.com",
+    "nationalgeographic.com",
+    # Finance
+    "investopedia.com",
+    "cnbc.com",
+    "marketwatch.com",
+    # Health (mainstream, non-academic)
+    "mayoclinic.org",
+    "webmd.com",
+    "healthline.com",
+    # Sports
+    "espn.com",
 }
 
 TIER_3_TLDS = {".edu", ".gov", ".org", ".ac.uk", ".ac.in"}
@@ -99,7 +133,17 @@ def score_url(url: str) -> int:
         return 45
     if "medium.com" in domain or "substack.com" in domain:
         return 52
-    return 50
+    # Bug fix: this used to be 50, which score_label() classifies as
+    # "Low" — meaning ANY domain not explicitly whitelisted above (most
+    # of the internet, for any topic outside academia/tech/mainstream
+    # news) was automatically treated as low-credibility by default, not
+    # because of anything about the source itself. 55 lands an unknown-
+    # but-otherwise-normal .com in "Medium" instead — still clearly below
+    # a recognized authority, but not punished as if it were a forum
+    # post. TIER_2 above is expanded per-category as real gaps show up;
+    # this default is the fallback for everything category-list still
+    # doesn't cover, so it shouldn't sit at the bottom by default.
+    return 55
 
 
 def score_label(score: int) -> str:
@@ -113,14 +157,23 @@ def score_label(score: int) -> str:
 
 
 def compute_confidence(sources: Dict, citations_used: list) -> int:
-    """Original confidence — domain credibility × citation coverage."""
+    """Original confidence — domain credibility × citation coverage.
+    Used for general/technical intent (see main.py) — compute_research_confidence
+    below is the academic-intent equivalent."""
     if not citations_used:
         return 0
     scores = [score_url(sources[i]["url"]) for i in citations_used if i in sources]
     if not scores:
         return 0
     avg_credibility = sum(scores) / len(scores)
-    citation_factor = min(1.0, len(citations_used) / 5)
+    # Bug fix: this divisor was 5, meaning a well-answered general
+    # question citing 2-3 genuinely good sources (which is normal — not
+    # every everyday question needs or has 5 independent citable sources
+    # the way an academic survey does) got capped at 40-60% of its
+    # deserved credibility score for no reason related to source
+    # quality. 3 still rewards citing more sources, just without
+    # penalizing questions that are legitimately answered well with fewer.
+    citation_factor = min(1.0, len(citations_used) / 3)
     return int(avg_credibility * citation_factor)
 
 

@@ -147,6 +147,7 @@ class FactVerificationAgent(Agent):
     failure-handling contract."""
 
     name = "fact_verify"
+    uses_llm = True  # batched get_llm() call below — see base.py for what this enables
 
     def trace_inputs(self, state: AgentState):
         return {"citations_used": len(state.get("citations_used", []))}

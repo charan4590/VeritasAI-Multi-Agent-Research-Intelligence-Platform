@@ -7,6 +7,16 @@ Changes from previous version:
   B. fetch_full_content(): for high-credibility academic URLs, fetches the
      full page text rather than relying on Tavily's 1500-char snippet
   C. web_search() unchanged API — existing callers need no changes
+  D. Multi-provider search: Tavily's free tier is only 1,000 queries/month
+     with no auto-reset mid-cycle, so a single exhausted account used to
+     mean the whole pipeline silently returned 0 sources. web_search() now
+     tries a small ordered list of providers (see _get_search_provider_order)
+     and falls through to the next one on failure — same shape as the
+     Groq -> Gemini -> Ollama fallback in llm.py. Currently: Tavily, then
+     Serper.dev (SERPER_API_KEY, free 2,500 queries, no card required —
+     https://serper.dev). Force one explicitly with SEARCH_PROVIDER=tavily
+     or SEARCH_PROVIDER=serper in .env; default "auto" tries whichever keys
+     are present, Tavily first.
 """
 
 import logging
@@ -28,6 +38,23 @@ from .cache import get_fetch_cache, get_search_cache
 logger = logging.getLogger(__name__)
 
 _client = None
+
+# Last search failure reason, surfaced by SupervisorAgent into the
+# activity log when a round comes back with 0 new sources — previously
+# this was only ever written to the backend logger, so the UI showed a
+# bare "gathered 0 sources" with no way to tell an invalid/expired
+# TAVILY_API_KEY, an exhausted quota, or a network problem apart.
+_last_search_error: Optional[str] = None
+
+
+def get_last_search_error() -> Optional[str]:
+    return _last_search_error
+
+
+def _set_last_search_error(exc: Optional[BaseException]) -> None:
+    global _last_search_error
+    _last_search_error = str(exc) if exc else None
+
 
 # Academic domains to prioritize — searched with site: operators when intent is academic
 ACADEMIC_DOMAINS = [
@@ -74,7 +101,7 @@ def _get_client():
     before_sleep=before_sleep_log(logger, logging.WARNING),
     reraise=False,
 )
-def _search_with_retry(query: str, max_results: int) -> List[Dict[str, Any]]:
+def _tavily_search_with_retry(query: str, max_results: int) -> List[Dict[str, Any]]:
     response = _get_client().search(
         query=query,
         max_results=max_results,
@@ -83,15 +110,90 @@ def _search_with_retry(query: str, max_results: int) -> List[Dict[str, Any]]:
     return response.get("results", [])
 
 
+# Backwards-compatible alias — some tests/callers referenced the old name.
+_search_with_retry = _tavily_search_with_retry
+
+
+@retry(
+    stop=stop_after_attempt(2),
+    wait=wait_exponential(multiplier=1, min=1, max=5),
+    retry=retry_if_exception_type(Exception),
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+    reraise=False,
+)
+def _serper_search_with_retry(query: str, max_results: int) -> List[Dict[str, Any]]:
+    """
+    Serper.dev — a Google-SERP-backed search API used as the fallback
+    provider. Free tier: 2,500 queries, no credit card required
+    (https://serper.dev). Response shape is normalized to match what
+    Tavily returns ("url", "title", "content") so nothing downstream
+    (academic_web_search, SupervisorAgent, etc.) needs to know which
+    provider actually served a given result.
+    """
+    api_key = os.environ.get("SERPER_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("SERPER_API_KEY not set. Get a free key at https://serper.dev")
+
+    resp = requests.post(
+        "https://google.serper.dev/search",
+        headers={"X-API-KEY": api_key, "Content-Type": "application/json"},
+        json={"q": query, "num": max_results},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+
+    results = []
+    for item in (data.get("organic") or [])[:max_results]:
+        results.append(
+            {
+                "url": item.get("link", ""),
+                "title": item.get("title", ""),
+                "content": item.get("snippet", ""),
+            }
+        )
+    return results
+
+
+_SEARCH_PROVIDERS = {
+    "tavily": lambda q, n: _tavily_search_with_retry(q, n),
+    "serper": lambda q, n: _serper_search_with_retry(q, n),
+}
+
+
+def _get_search_provider_order() -> List[str]:
+    """
+    SEARCH_PROVIDER=auto (default): try whichever providers have a key
+    configured, Tavily first, then Serper. SEARCH_PROVIDER=tavily or
+    =serper: try that one first, then fall back to the other if it fails
+    (missing key, quota exhausted, network error, etc.) — mirrors the
+    manual-provider-with-fallback behavior in llm.get_llm().
+    """
+    requested = os.environ.get("SEARCH_PROVIDER", "auto").strip().lower()
+    tavily_key = os.environ.get("TAVILY_API_KEY", "").strip()
+    serper_key = os.environ.get("SERPER_API_KEY", "").strip()
+
+    auto_order = []
+    if tavily_key:
+        auto_order.append("tavily")
+    if serper_key:
+        auto_order.append("serper")
+
+    if requested in _SEARCH_PROVIDERS:
+        return [requested] + [p for p in auto_order if p != requested]
+    return auto_order
+
+
 def web_search(query: str, max_results: int = 5) -> List[Dict[str, Any]]:
     """
-    Standard web search with retry. Returns empty list on failure.
+    Standard web search with retry + multi-provider fallback. Returns
+    empty list only if every configured provider fails.
 
     Milestone 3: results are cached (namespace "search", default TTL
     SEARCH_CACHE_TTL). Only a *successful* result is cached — a failure
-    falls straight through to the except block below without touching the
-    cache, so a transient Tavily outage can't get "stuck" returning an
-    empty list for the full TTL window once the API recovers.
+    falls straight through without touching the cache, so a transient
+    outage (or an exhausted Tavily quota that later resets) can't get
+    "stuck" returning an empty list for the full TTL window.
     """
     cache = get_search_cache()
     cache_key = f"{query}|{max_results}"
@@ -99,13 +201,30 @@ def web_search(query: str, max_results: int = 5) -> List[Dict[str, Any]]:
     if hit:
         return cached
 
-    try:
-        results = _search_with_retry(query, max_results) or []
-        cache.set(cache_key, results)
-        return results
-    except Exception as exc:
-        logger.error(f"[search] permanently failed: {query!r} — {exc}")
+    providers = _get_search_provider_order()
+    if not providers:
+        msg = (
+            "No search provider configured — set TAVILY_API_KEY "
+            "(https://tavily.com) and/or SERPER_API_KEY (https://serper.dev) in .env"
+        )
+        logger.error(f"[search] {msg}")
+        _set_last_search_error(msg)
         return []
+
+    last_exc: Optional[BaseException] = None
+    for provider in providers:
+        try:
+            results = _SEARCH_PROVIDERS[provider](query, max_results) or []
+            cache.set(cache_key, results)
+            _set_last_search_error(None)
+            return results
+        except Exception as exc:
+            last_exc = exc
+            logger.warning(f"[search] provider '{provider}' failed for {query!r}: {exc}")
+
+    logger.error(f"[search] all providers ({providers}) permanently failed: {query!r} — {last_exc}")
+    _set_last_search_error(last_exc)
+    return []
 
 
 def academic_web_search(query: str, max_results: int = 7) -> List[Dict[str, Any]]:

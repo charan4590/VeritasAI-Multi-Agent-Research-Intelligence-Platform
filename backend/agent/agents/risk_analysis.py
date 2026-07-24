@@ -315,6 +315,7 @@ class RiskAnalysisAgent(Agent):
     credibility. See module docstring for the full design rationale."""
 
     name = "risk_analyze"
+    uses_llm = True  # follow-up-question generation calls get_llm() — see base.py
 
     def trace_inputs(self, state: AgentState):
         return {

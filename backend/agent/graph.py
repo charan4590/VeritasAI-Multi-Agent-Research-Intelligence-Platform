@@ -74,6 +74,21 @@ def reflect_node(state: AgentState) -> dict:
     status = "sufficient" if decision.sufficient else f"gap: {decision.reasoning}"
     logger.info(f"Reflection round {state['round']}: {status}")
 
+    # Bug fix (metrics dashboard always showing 0 tokens): `reflect` can
+    # fall through to an LLM judgment call (smart_reflect's heuristics
+    # don't always resolve it), but it's the one node NOT wrapped by
+    # Agent.__call__ (see module docstring), so it never got the
+    # automatic token-estimation hook added there. Recorded manually here
+    # for the same reason base.py's own comment gives: an honest estimate
+    # beats a hardcoded 0.
+    tracker = state.get("tracker")
+    if tracker is not None:
+        input_text = state["question"] + " ".join(
+            str(s.get("snippet", ""))[:500] for s in list(state["sources"].values())[:20]
+        )
+        tracker.estimate_tokens_from_text(input_text, role="input")
+        tracker.estimate_tokens_from_text(decision.reasoning or "", role="output")
+
     return {
         "reflection": decision,
         "log": state["log"] + [f"Reflection: {decision.reasoning}"],
@@ -89,7 +104,13 @@ def route_after_reflect(state: AgentState) -> str:
 # Graph
 # ---------------------------------------------------------------------------
 
-
+def _route_after_planner(state) -> str:
+    """If planner rejected the query, skip straight to END."""
+    plan = state.get("plan")
+    report = state.get("report", "")
+    if not plan and report:
+        return "end"
+    return "search"
 def build_graph():
     g = StateGraph(AgentState)
     g.add_node("planner", PlannerAgent())
@@ -103,7 +124,7 @@ def build_graph():
     g.add_node("revise", RevisionAgent())
 
     g.add_edge(START, "planner")
-    g.add_edge("planner", "search")
+    g.add_conditional_edges("planner", _route_after_planner, {"search": "search", "end": END})
     g.add_edge("search", "reflect")
     g.add_conditional_edges(
         "reflect",

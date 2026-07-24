@@ -10,7 +10,7 @@ import logging
 import os
 import uuid
 
-from ..rag import index_sources, retrieve_relevant_chunks
+from ..rag import get_last_rag_error, index_sources, retrieve_relevant_chunks
 from ..reranker import is_reranker_available, rerank_chunks
 from ..state import AgentState
 from .base import Agent
@@ -56,7 +56,11 @@ class RAGAgent(Agent):
                 log_entries.append("RAG: no chunks — using raw sources")
         else:
             chunks = []
-            log_entries.append("RAG: unavailable — using raw sources")
+            reason = get_last_rag_error()
+            if reason:
+                log_entries.append(f"RAG: unavailable — {reason}")
+            else:
+                log_entries.append("RAG: unavailable — using raw sources")
 
         return {
             "rag_session_id": session_id,

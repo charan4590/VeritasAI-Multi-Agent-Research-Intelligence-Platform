@@ -275,6 +275,7 @@ header h1{font-family:var(--font-d);font-size:22px;margin-right:auto;}
       <select id="modelSelect">
         <option value="">Ollama (local)</option>
         <option value="groq">Groq cloud</option>
+        <option value="gemini">Gemini (free)</option>
       </select>
       <span class="status-badge" id="status">idle</span>
       <a href="/metrics.html" class="hdr-btn" target="_blank">📊 Metrics</a>
@@ -291,9 +292,17 @@ header h1{font-family:var(--font-d);font-size:22px;margin-right:auto;}
         <button class="mode-btn" id="modeDebate" onclick="setMode('debate')">Debate</button>
       </div>
       <button id="submitBtn" onclick="startResearch()">Research</button>
+      <!-- Bug fix (#1): the only way to start a fresh topic used to be a
+           "+ New" button buried inside #reportActions, which stays
+           display:none until a run finishes -- mid-run, or if you just
+           didn't notice it under the report, there was no visible way to
+           reset. This is always visible, and always does a full reset
+           (question box, log, report, and the backend's conversation
+           memory via clearConversation() below) regardless of run state. -->
+      <button id="newBtn" class="hdr-btn" onclick="newResearch()" title="Clear the question and start a new, unrelated topic">↺ New</button>
     </div>
 
-  
+
   <!-- PDF Upload Panel -->
   <div id="pdfPanel" style="display:none;padding:12px 24px;background:var(--raised);border-bottom:1px solid var(--rule);">
     <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
@@ -303,6 +312,13 @@ header h1{font-family:var(--font-d);font-size:22px;margin-right:auto;}
     </div>
     <div id="pdfList" style="margin-top:10px;font-family:var(--font-m);font-size:12px;color:var(--soft)"></div>
   </div>
+  <!-- Bug fix (#2): before this, whether an uploaded PDF actually
+       contributed to a report was only discoverable by scrolling to the
+       bottom and expanding the collapsed "Sources Retrieved" cards one at
+       a time. This banner is visible the moment PDFs exist in the
+       knowledge base, and updates after every run to say plainly whether
+       THIS report actually used them. -->
+  <div id="pdfActiveBanner" style="display:none;padding:8px 24px;background:var(--blue-bg);border-bottom:1px solid var(--rule);font-family:var(--font-m);font-size:12px;color:var(--blue);"></div>
   <div id="content">
       <!-- LOG PANE -->
       <div class="pane">
@@ -315,7 +331,6 @@ header h1{font-family:var(--font-d);font-size:22px;margin-right:auto;}
         <div id="reportActions" style="display:none">
           <button class="action-btn" onclick="window.print()">⬇ Export PDF</button>
           <button class="action-btn" onclick="copyReport()">📋 Copy</button>
-          <button class="action-btn" onclick="newResearch()">+ New</button>
         </div>
         <div class="pane-label">Report</div>
         <div id="confidenceBar" style="display:none">
@@ -430,6 +445,7 @@ function logout() {
 function start() {
   loadHistory();
   setupVoice();
+  loadPdfList(); // Bug fix (#2): show the "N PDFs in knowledge base" banner on load, not just when the Docs panel happens to be opened.
 }
 
 function authHeaders() {
@@ -498,6 +514,7 @@ function startResearch() {
   document.getElementById('grounding').style.display = 'none';
   document.getElementById('sourcesRetrieved').style.display = 'none';
   document.getElementById('submitBtn').disabled = true;
+  refreshIdleBanner(); // reset to the neutral "N PDFs in knowledge base" state until this run's 'done' event says what actually got used
   setStatus('planning', 'active');
 
   const endpoint = mode === 'debate' ? '/api/debate/stream' : '/api/research/stream';
@@ -541,6 +558,7 @@ function startResearch() {
       showRiskAnalysis(data);
       showGrounding(data);
       showSourcesRetrieved(data);
+      updatePdfBanner(data);
       document.getElementById('reportActions').style.display = 'flex';
       setStatus('done', 'done');
       document.getElementById('submitBtn').disabled = false;
@@ -569,6 +587,10 @@ function startResearch() {
 }
 
 function newResearch() {
+  // If a run is still in flight, stop it first so its 'done'/'token'
+  // events don't land after we've just reset the UI for a new topic.
+  if (es) { es.close(); es = null; }
+
   streamBuffer = '';
   citationVerification = {};
   document.getElementById('questionInput').value = '';
@@ -582,10 +604,19 @@ function newResearch() {
   document.getElementById('grounding').style.display = 'none';
   document.getElementById('sourcesRetrieved').style.display = 'none';
   document.getElementById('log').innerHTML = '';
+  document.getElementById('submitBtn').disabled = false;
 
   setStatus('idle', '');
   activeHistoryId = null;
   document.querySelectorAll('.hist-item').forEach(el => el.classList.remove('active'));
+
+  // Bug fix (#1/#4): a completed run's Q&A stays in the backend's
+  // conversation memory (memory.py's _conversation_context) for up to 5
+  // turns so a genuine follow-up can build on it (see askFollowUp below
+  // and report_generator.py). Clicking New means "this is an unrelated
+  // topic, not a follow-up" — cut that thread here so the next question
+  // doesn't get stale, irrelevant context dragged into its prompt.
+  fetch('/api/conversation/clear', {method: 'POST', headers: authHeaders()}).catch(() => {});
 }
 
 // ---- UI helpers ----
@@ -928,6 +959,7 @@ async function loadSession(id) {
     showRiskAnalysis(row);
     showGrounding(row);
     showSourcesRetrieved(row);
+    updatePdfBanner(row);
     document.getElementById('reportActions').style.display = 'flex';
     document.getElementById('log').innerHTML = '<p class="log-placeholder">Loaded from history</p>';
     setStatus('done', 'done');
@@ -949,6 +981,15 @@ async function deleteHistory(id, e) {
 function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
+
+document.getElementById("modelSelect").addEventListener("change", async (e) => {
+    const provider = e.target.value || "ollama";
+    await fetch("/api/provider", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({provider: provider})
+    });
+});
 
 document.getElementById('questionInput').addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) startResearch();
@@ -981,22 +1022,66 @@ async function uploadPdf(input) {
   }
 }
 
+let pdfDocCount = 0;
+
 async function loadPdfList() {
   try {
     const docs = await fetch('/api/docs').then(r => r.json());
+    pdfDocCount = docs.length;
     const el = document.getElementById('pdfList');
-    if (!docs.length) { el.textContent = 'No documents ingested yet.'; return; }
-    el.innerHTML = docs.map(d =>
-      `<span style="margin-right:16px">📄 ${escHtml(d.filename)} (${d.chunk_count} chunks)
-       <button onclick="deletePdf('${d.id}')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:12px;">✕</button>
-       </span>`
-    ).join('');
+    if (!docs.length) { el.textContent = 'No documents ingested yet.'; }
+    else {
+      el.innerHTML = docs.map(d =>
+        `<span style="margin-right:16px">📄 ${escHtml(d.filename)} (${d.chunk_count} chunks)
+         <button onclick="deletePdf('${d.id}')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:12px;">✕</button>
+         </span>`
+      ).join('');
+    }
+    refreshIdleBanner();
   } catch(e) {}
 }
 
 async function deletePdf(id) {
   await fetch('/api/docs/' + id, {method:'DELETE'});
   loadPdfList();
+}
+
+// ---- PDF usage clarity (Bug fix #2) ----
+// Before this, whether a research run actually used an uploaded PDF was
+// only visible by scrolling down and expanding a collapsed source card.
+// This shows, up front, that PDFs will be searched at all (every question
+// unconditionally searches the PDF index alongside the web -- see
+// SYSTEM_DESIGN.md section 5), and after each run, whether this
+// particular report actually cited any of them.
+function refreshIdleBanner() {
+  const banner = document.getElementById('pdfActiveBanner');
+  if (!pdfDocCount) { banner.style.display = 'none'; return; }
+  banner.style.display = 'block';
+  banner.textContent = `📄 ${pdfDocCount} PDF${pdfDocCount === 1 ? '' : 's'} in your knowledge base — included alongside web search on every question you ask.`;
+}
+
+function updatePdfBanner(data) {
+  const banner = document.getElementById('pdfActiveBanner');
+  if (!pdfDocCount) { banner.style.display = 'none'; return; }
+
+  const allSources = Object.values(data.all_sources || {});
+  const pdfSources = allSources.filter(s => s.source_type === 'pdf');
+  const citedPdfSources = pdfSources.filter(s => s.cited);
+
+  banner.style.display = 'block';
+  if (citedPdfSources.length) {
+    banner.style.background = 'var(--green-bg)';
+    banner.style.color = 'var(--green)';
+    banner.textContent = `📄 This report used ${citedPdfSources.length} of your uploaded PDF${citedPdfSources.length === 1 ? '' : 's'} as a cited source (see [PDF]-tagged citations below) — not just web search.`;
+  } else if (pdfSources.length) {
+    banner.style.background = 'var(--amber-bg)';
+    banner.style.color = 'var(--amber)';
+    banner.textContent = `📄 Your uploaded PDF(s) were searched but nothing from them matched closely enough to cite — this report is based on web sources only.`;
+  } else {
+    banner.style.background = 'var(--blue-bg)';
+    banner.style.color = 'var(--blue)';
+    banner.textContent = `📄 ${pdfDocCount} PDF${pdfDocCount === 1 ? '' : 's'} in your knowledge base — included alongside web search on every question you ask.`;
+  }
 }
 
 init();

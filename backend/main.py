@@ -89,10 +89,17 @@ from agent.guardrails import (
     check_rate_limit,
     get_guardrail_status,
 )
-from agent.memory import add_conversation_turn, delete_memory, retrieve_memories, store_memory
+from agent.memory import (
+    add_conversation_turn,
+    clear_conversation,
+    delete_memory,
+    retrieve_memories,
+    store_memory,
+)
 from agent.observability import (
     RunTracker,
     get_aggregate_stats,
+    get_node_averages,
     get_node_breakdown,
     get_run_metrics,
     init_observability_tables,
@@ -228,6 +235,23 @@ RESEARCH_TIMEOUT = int(os.environ.get("RESEARCH_TIMEOUT", "120"))
 # ---------------------------------------------------------------------------
 
 
+@app.post("/api/conversation/clear", tags=["meta"])
+async def clear_conversation_endpoint():
+    """
+    Explicit "start a new topic" signal from the frontend's New button
+    (see index.html's newResesarch()... newResearch()). Without this,
+    get_conversation_context() (memory.py) keeps injecting the last 5
+    turns into every subsequent planner/synthesis prompt indefinitely —
+    fine for a genuine follow-up, but means switching to an unrelated
+    topic still drags the old conversation's context along until it ages
+    out 5 turns later. The LLM prompt itself also says "if unrelated,
+    ignore the context below" as a soft safety net, but a hard reset here
+    is the actual fix.
+    """
+    clear_conversation()
+    return {"ok": True}
+
+
 @app.get("/api/auth/check", tags=["meta"])
 async def auth_check():
     return {"requires_password": False}
@@ -283,6 +307,17 @@ async def _run_research_stream(question: str, max_rounds: int) -> AsyncIterator[
         try:
             guard.__enter__()
         except ConcurrencyLimitExceeded as exc:
+            # Bug fix (metrics dashboard): tracker.start() already inserted
+            # a `runs` row (above, before run_in_executor scheduled this
+            # function) with status='running'. Returning here without ever
+            # calling tracker.finish() left that row permanently
+            # status='running'/total_latency_ms=NULL — every concurrency
+            # rejection was a null-latency row that never resolved,
+            # dragging down /api/metrics/runs' averages (and, since the
+            # node chart derives from that same endpoint, making the
+            # per-node breakdown look near-zero too) for as long as the
+            # process ran.
+            tracker.finish(status="rejected", error=str(exc))
             queue.put_nowait(sse({"type": "error", "message": str(exc)}))
             queue.put_nowait(None)
             return
@@ -319,6 +354,20 @@ async def _run_research_stream(question: str, max_rounds: int) -> AsyncIterator[
             )
             last_log = 0
             latest_sources = {}
+            # Bug fix (RAG chunk count always 0): rag_chunks used to be
+            # read from the *original* `state` object below (line ~383),
+            # but LangGraph's .stream(state, stream_mode="updates") never
+            # mutates the state object you passed in — it only yields
+            # each node's partial-update dict through the iterator. That
+            # original `state` variable was permanently stuck at
+            # initial_state()'s empty retrieved_chunks=[] forever,
+            # regardless of what the "rag" node actually retrieved. This
+            # was true even before the Ollama/embedding investigation —
+            # RAG could have been working perfectly the whole time and
+            # this number would still have read 0. Tracked here the exact
+            # same way latest_sources already is, from the "rag" node's
+            # own streamed partial.
+            latest_retrieved_chunks = []
             final_state = None
 
             for update in _graph.stream(state, stream_mode="updates"):
@@ -330,6 +379,8 @@ async def _run_research_stream(question: str, max_rounds: int) -> AsyncIterator[
                         last_log = len(log)
                     if "sources" in partial:
                         latest_sources = partial["sources"]
+                    if "retrieved_chunks" in partial:
+                        latest_retrieved_chunks = partial["retrieved_chunks"]
                     # Phase 5: revise joined risk_analyze/fact_verify/
                     # validate as a terminal node after validate. Same
                     # merge rationale — and importantly, revise's
@@ -345,7 +396,7 @@ async def _run_research_stream(question: str, max_rounds: int) -> AsyncIterator[
                 return
 
             used = final_state.get("citations_used", [])
-            rag_chunks = len(state.get("retrieved_chunks", []))
+            rag_chunks = len(latest_retrieved_chunks)
             tracker.rag_enabled = rag_chunks > 0
             tracker.chunks_retrieved = rag_chunks
 
@@ -611,31 +662,37 @@ async def debate_stream(
         ..., min_length=3, examples=["Should social media platforms be regulated like utilities?"]
     ),
 ):
-    async def generate():
-        run_start = time.time()
-        log_messages = []
+    # Bug fix: this used to collect every progress message into a plain
+    # Python list (log_cb just did log_messages.append(msg)) while
+    # run_debate() ran to completion inside asyncio.to_thread(), then
+    # looped over that list and yielded every message back-to-back only
+    # *after* the whole debate had already finished — so the Activity Log
+    # appeared to do nothing for ~2 minutes and then dump every line at
+    # once. The research pipeline (_run_research_stream above) never had
+    # this problem because it pushes progress onto a live asyncio.Queue
+    # as each node actually finishes, not after the whole run completes.
+    # This mirrors that exact pattern for debate mode.
+    run_start = time.time()
+    queue: asyncio.Queue = asyncio.Queue()
 
-        def log_cb(msg):
-            log_messages.append(msg)
+    def log_cb(msg: str):
+        queue.put_nowait(sse({"type": "progress", "node": "debate", "message": msg}))
 
+    def run_debate_work():
         try:
-            result = await asyncio.to_thread(run_debate, question, log_cb)
-            for msg in log_messages:
-                yield sse({"type": "progress", "node": "debate", "message": msg})
+            result = run_debate(question, log_cb)
 
             sources_raw = result.get("sources", {})
             int_sources = {int(k): v for k, v in sources_raw.items()}
             used = result.get("citations_used", [])
-            eval_scores = await asyncio.to_thread(
-                evaluate_report, question, result.get("report", ""), int_sources, used
-            )
+            eval_scores = evaluate_report(question, result.get("report", ""), int_sources, used)
 
             for k, s in sources_raw.items():
                 s["credibility"] = score_url(s.get("url", ""))
                 s["credibility_label"] = score_label(s["credibility"])
 
             confidence = compute_confidence(int_sources, used)
-            follow_ups = await asyncio.to_thread(generate_follow_ups, question, result.get("report", ""))
+            follow_ups = generate_follow_ups(question, result.get("report", ""))
             latency_ms = int((time.time() - run_start) * 1000)
 
             session_id = save_session(
@@ -655,22 +712,35 @@ async def debate_stream(
                 eval_scores=eval_scores,
             )
 
-            yield sse(
-                {
-                    "type": "done",
-                    "report": result.get("report", ""),
-                    "sources": sources_raw,
-                    "citations_used": used,
-                    "confidence": confidence,
-                    "follow_ups": follow_ups,
-                    "eval_scores": eval_scores,
-                    "latency_ms": latency_ms,
-                    "session_id": session_id,
-                }
+            queue.put_nowait(
+                sse(
+                    {
+                        "type": "done",
+                        "report": result.get("report", ""),
+                        "sources": sources_raw,
+                        "citations_used": used,
+                        "confidence": confidence,
+                        "follow_ups": follow_ups,
+                        "eval_scores": eval_scores,
+                        "latency_ms": latency_ms,
+                        "session_id": session_id,
+                    }
+                )
             )
         except Exception as exc:
             logger.exception("Debate stream failed")
-            yield sse({"type": "error", "message": str(exc)})
+            queue.put_nowait(sse({"type": "error", "message": str(exc)}))
+        finally:
+            queue.put_nowait(None)
+
+    asyncio.get_event_loop().run_in_executor(None, run_debate_work)
+
+    async def generate():
+        while True:
+            item = await queue.get()
+            if item is None:
+                break
+            yield item
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
@@ -756,6 +826,18 @@ async def metrics_runs():
 @app.get("/api/metrics/nodes/{run_id}", tags=["metrics"])
 async def metrics_nodes(run_id: int):
     return await asyncio.to_thread(get_node_breakdown, run_id)
+
+
+@app.get("/api/metrics/node-averages", tags=["metrics"])
+async def metrics_node_averages(limit: int = Query(50, ge=1, le=200)):
+    """
+    Real average latency/execution-count/failure-count per pipeline node
+    across the most recent `limit` runs. Added alongside the dashboard fix
+    that replaced metrics.html's hardcoded simulated per-node percentages
+    with this actual data (node_executions has always had it, since Phase
+    3 Milestone 1 — nothing queried it in aggregate before now).
+    """
+    return await asyncio.to_thread(get_node_averages, limit)
 
 
 @app.get("/api/metrics/summary", tags=["metrics"])
@@ -853,6 +935,19 @@ async def run_baselines(body: dict):
 # Health & version
 # ---------------------------------------------------------------------------
 
+
+
+@app.post("/api/provider", tags=["meta"])
+async def set_provider_endpoint(body: dict):
+    from agent.llm import set_provider
+    provider = body.get("provider", "auto")
+    set_provider(provider)
+    return {"ok": True, "provider": provider}
+
+@app.get("/api/provider", tags=["meta"])
+async def get_provider_endpoint():
+    from agent.llm import get_selected_provider
+    return {"provider": get_selected_provider()}
 
 @app.get("/api/health", response_model=HealthResponse, tags=["meta"])
 async def health():

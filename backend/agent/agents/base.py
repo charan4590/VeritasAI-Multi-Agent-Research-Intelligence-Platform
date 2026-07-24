@@ -32,6 +32,7 @@ per-request — reading them from state at call time is what makes that
 work without rebuilding the graph on every request.
 """
 
+import json
 from abc import ABC, abstractmethod
 from contextlib import nullcontext
 from typing import Any, Dict
@@ -43,6 +44,18 @@ class Agent(ABC):
     """Base class for every pipeline agent."""
 
     name: str = "agent"
+
+    # Bug fix (metrics dashboard always showing 0 tokens / $0.0000 cost):
+    # RunTracker.add_tokens()/estimate_tokens_from_text() existed since
+    # Phase 2 but nothing ever called them — every run's total_input_tokens/
+    # total_output_tokens stayed 0 forever, and node latency was averaged
+    # from these same rows plus a hardcoded per-node percentage split in
+    # metrics.html (see that file's fix). Subclasses that actually call
+    # get_llm() set this True; __call__ below then estimates input/output
+    # tokens generically from state + the node's own return dict, so no
+    # per-agent instrumentation code is needed (same "zero code per agent"
+    # principle the rest of this class already follows).
+    uses_llm: bool = False
 
     @abstractmethod
     def run(self, state: AgentState) -> dict:
@@ -80,6 +93,12 @@ class Agent(ABC):
         with node_cm:
             with span_cm as span:
                 result = self.run(state)
+                if tracker is not None and self.uses_llm:
+                    input_text, output_text = _estimate_io_text(state, result)
+                    if input_text:
+                        tracker.estimate_tokens_from_text(input_text, role="input")
+                    if output_text:
+                        tracker.estimate_tokens_from_text(output_text, role="output")
                 if span is not None:
                     # Explicit span.end(outputs=...) — this is the
                     # documented usage pattern in tracing.py's own
@@ -87,6 +106,42 @@ class Agent(ABC):
                     # empty outputs if the caller doesn't do this).
                     span.end(outputs=_summarize_output(result), status="ok")
                 return result
+
+
+def _estimate_io_text(state: AgentState, result: dict):
+    """
+    Generic, per-agent-code-free approximation of what a node fed into
+    and got out of the LLM, for RunTracker's char/4 token estimate.
+
+    Not exact (a real fix would thread actual prompt strings out of each
+    agent's run()) but every prior number here was a hard 0, so even a
+    rough estimate — proportional to how much source material and output
+    text this node actually touched — is strictly more useful than the
+    status quo, and matches this codebase's own stated "1 token ≈ 4
+    characters" convention (see observability.py's module docstring).
+    Bounded (first 20 sources/chunks, 500 chars each) so a huge research
+    session can't make this scan unexpectedly slow.
+    """
+    input_parts = [state.get("question", "") or ""]
+    for s in list(state.get("sources", {}).values())[:20]:
+        input_parts.append(str(s.get("snippet", ""))[:500])
+    for c in list(state.get("retrieved_chunks", []) or [])[:20]:
+        input_parts.append(str(c.get("text", ""))[:500])
+    input_text = " ".join(p for p in input_parts if p)
+
+    output_parts = []
+    for key, val in (result or {}).items():
+        if key in ("log", "tracker", "tracer", "stream_callback"):
+            continue
+        if isinstance(val, str):
+            output_parts.append(val)
+        elif isinstance(val, (list, dict)):
+            try:
+                output_parts.append(json.dumps(val, default=str))
+            except Exception:
+                pass
+    output_text = " ".join(p for p in output_parts if p)
+    return input_text, output_text
 
 
 def _summarize_output(result: dict) -> Dict[str, Any]:

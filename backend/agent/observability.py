@@ -32,6 +32,7 @@ MODEL_COSTS = {
     "ollama": {"input": 0.0, "output": 0.0},  # local = free
     "groq_llama3": {"input": 0.05, "output": 0.08},  # Groq llama3.1-8b
     "groq_llama3_70b": {"input": 0.59, "output": 0.79},
+    "gemini": {"input": 0.0, "output": 0.0},  # free tier (see README) — 1500 req/day
     "default": {"input": 0.10, "output": 0.20},
 }
 
@@ -210,8 +211,44 @@ class RunTracker:
 
 
 def get_run_metrics(limit: int = 20) -> List[Dict]:
+    """
+    Bug fix: metrics.html's Recent Runs table and Quality Score
+    Distribution chart read r.eval_grade, r.eval_overall, r.latency_ms,
+    and r.rag_chunks_used off each row — none of which exist on the
+    `runs` table. Those live on db.py's `history` table instead (under
+    the exact same names, not by accident: history is the Phase 3/5
+    source of truth for eval scores; `runs`/`node_executions` are the
+    separate Phase 2 observability tables added later). Both tables live
+    in the same SQLite file (same DB_PATH), linked by runs.session_id ->
+    history.id, but nothing ever actually joined them, so every row
+    silently fell back to "—" / "0 chunks" / "No eval scores yet"
+    forever, even on runs that completed successfully with real eval
+    scores sitting one join away.
+
+    LEFT JOIN, not INNER: a rejected/aborted run (see main.py's
+    ConcurrencyLimitExceeded fix) never gets a session_id and legitimately
+    has no history row — it should still appear in the list, just without
+    eval data, rather than disappearing entirely.
+    """
     with _get_conn() as conn:
-        rows = conn.execute("SELECT * FROM runs ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+        rows = conn.execute(
+            """
+            SELECT
+                r.id, r.session_id, r.question, r.mode, r.status,
+                r.error_message, r.created_at, r.model_used,
+                r.total_latency_ms, r.total_input_tokens, r.total_output_tokens,
+                r.estimated_cost_usd, r.rag_enabled, r.chunks_retrieved,
+                COALESCE(h.latency_ms, r.total_latency_ms) AS latency_ms,
+                COALESCE(h.rag_chunks_used, r.chunks_retrieved) AS rag_chunks_used,
+                h.eval_overall AS eval_overall,
+                h.eval_grade AS eval_grade
+            FROM runs r
+            LEFT JOIN history h ON h.id = r.session_id
+            ORDER BY r.created_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -220,6 +257,34 @@ def get_node_breakdown(run_id: int) -> List[Dict]:
         rows = conn.execute(
             "SELECT * FROM node_executions WHERE run_id = ? ORDER BY start_time_ms",
             (run_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_node_averages(limit_runs: int = 50) -> List[Dict]:
+    """
+    Bug fix: metrics.html's "Avg latency by pipeline node" chart never
+    called this data at all — it was hardcoded percentages of the overall
+    average latency (planner 10%, search 35%, ...), a placeholder labeled
+    "Simulate node breakdown" in a code comment that shipped as-is. Real
+    per-node timing has been recorded in node_executions since Phase 3
+    Milestone 1 (via Agent.__call__ -> RunTracker.node()) but nothing ever
+    queried it in aggregate. This does: average latency, execution count,
+    and failure count per node name, across the most recent N runs.
+    """
+    with _get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT node_name,
+                   AVG(latency_ms) as avg_latency_ms,
+                   COUNT(*) as executions,
+                   SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as failures
+            FROM node_executions
+            WHERE run_id IN (SELECT id FROM runs ORDER BY created_at DESC LIMIT ?)
+            GROUP BY node_name
+            ORDER BY avg_latency_ms DESC
+            """,
+            (limit_runs,),
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -249,15 +314,60 @@ def _now_ms() -> int:
 
 
 def _detect_model() -> str:
-    if os.environ.get("GROQ_API_KEY"):
-        return os.environ.get("GROQ_MODEL", "groq_llama3")
+    """
+    Bug fix: this only ever checked whether GROQ_API_KEY was *set*, never
+    which provider the UI's model dropdown actually selected (POST
+    /api/provider -> llm.set_provider(), a runtime choice) or whether
+    Gemini was in play at all — every Gemini run was silently mislabeled
+    as Ollama here, and once Groq's key was set, this returned "groq" even
+    while the user had manually switched the dropdown to Ollama.
+    """
+    try:
+        from .llm import get_selected_provider
+
+        selected = get_selected_provider()
+    except Exception:
+        selected = "auto"
+
+    groq_key = os.environ.get("GROQ_API_KEY", "").strip()
+    gemini_key = os.environ.get("GOOGLE_API_KEY", "").strip()
+
+    order = [selected] if selected != "auto" else []
+    if groq_key:
+        order.append("groq")
+    if gemini_key:
+        order.append("gemini")
+    order.append("ollama")
+
+    for provider in order:
+        if provider == "groq" and groq_key:
+            return os.environ.get("GROQ_MODEL", "groq_llama3")
+        if provider == "gemini" and gemini_key:
+            return f"gemini/{os.environ.get('GEMINI_MODEL', 'gemini-2.0-flash')}"
+        if provider == "ollama":
+            return f"ollama/{os.environ.get('OLLAMA_MODEL', 'llama3.2')}"
     return f"ollama/{os.environ.get('OLLAMA_MODEL', 'llama3.2')}"
 
 
 def _estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
     if "ollama" in model:
         return 0.0
-    tier = MODEL_COSTS.get(model, MODEL_COSTS["default"])
+    # Bug fix: MODEL_COSTS' keys ("groq_llama3", "groq_llama3_70b") never
+    # matched the actual value _detect_model() returned for Groq (the raw
+    # GROQ_MODEL env var, e.g. "llama-3.1-8b-instant") — the dict lookup
+    # below was an exact-match `.get()`, so it silently fell through to
+    # MODEL_COSTS["default"] for every single Groq run regardless of which
+    # Groq model was actually used, over- or under-pricing it. Matching by
+    # substring against the real model identifier fixes that.
+    lower = model.lower()
+    if "gemini" in lower:
+        tier = MODEL_COSTS["gemini"]
+    elif "70b" in lower:
+        tier = MODEL_COSTS["groq_llama3_70b"]
+    elif "groq" in lower or "llama" in lower or "instant" in lower or "versatile" in lower:
+        tier = MODEL_COSTS["groq_llama3"]
+    else:
+        tier = MODEL_COSTS["default"]
     return (input_tokens * tier["input"] + output_tokens * tier["output"]) / 1_000_000
 
 

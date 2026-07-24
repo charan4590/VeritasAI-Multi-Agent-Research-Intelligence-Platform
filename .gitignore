@@ -7,3 +7,5 @@ data/cache/
 data/*.db
 *.db
 !tests/**/*.db
+data/chroma_db/
+.DS_Store

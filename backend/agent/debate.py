@@ -75,6 +75,26 @@ def run_debate(question: str, log_cb=None) -> dict:
         f"[{s['id']}] {s['title']}\n{s['url']}\n{s['snippet']}" for s in sources.values()
     )
 
+    # Citation-density rules shared by both sides. Bug fix: debate mode's
+    # confidence score is compute_confidence() from credibility.py, which
+    # is avg_credibility_of_cited_sources * min(1, citations_used/3) — so
+    # a debate that only ever cited 1-2 sources (easy to do when the
+    # prompt just says "use [n] citations" with no minimum) was capped at
+    # 33-66% of its deserved score regardless of how good those sources
+    # were. This mirrors the same fix already applied to the main
+    # research pipeline's report_generator.py prompts: explicitly require
+    # citing several distinct sources and citing every paragraph that
+    # makes a factual claim, so citations_used actually reflects how much
+    # evidence was gathered instead of undershooting it.
+    citation_rules = (
+        "Cite [n] from the provided numbered sources. Draw on AT LEAST "
+        "4-5 DIFFERENT numbered sources if that many are available — "
+        "don't lean on the same 1-2 sources for the whole argument. "
+        "Every paragraph making a factual claim must include at least "
+        "one [n] citation; a paragraph with no citation should only be "
+        "used for framing/transition, not for evidence."
+    )
+
     # Step 3 — FOR agent
     log("Agent A arguing FOR the topic...")
     for_response = llm.invoke(
@@ -82,7 +102,7 @@ def run_debate(question: str, log_cb=None) -> dict:
             (
                 "system",
                 "You argue strongly FOR the topic in markdown. "
-                "Use [n] citations from the provided sources. "
+                f"{citation_rules} "
                 "Use heading '## Arguments For' and short paragraphs.",
             ),
             ("human", f"Topic: {question}\n\nSources:\n{sources_block}"),
@@ -96,25 +116,68 @@ def run_debate(question: str, log_cb=None) -> dict:
             (
                 "system",
                 "You argue strongly AGAINST the topic in markdown. "
-                "Use [n] citations from the provided sources. "
+                f"{citation_rules} "
                 "Use heading '## Arguments Against' and short paragraphs.",
             ),
             ("human", f"Topic: {question}\n\nSources:\n{sources_block}"),
         ]
     )
 
-    # Step 5 — Combine
+    # Step 5 — Verdict
+    # Bug fix: debate mode used to stop at "Arguments For" / "Arguments
+    # Against" with no synthesis at all — a real question like "does
+    # diesel outperform petrol" got two one-sided arguments and no actual
+    # answer. This step reads both sides plus the same sources and forces
+    # an honest conclusion: lean one way if the evidence actually
+    # supports it, or say plainly that it's genuinely mixed/context-
+    # dependent and explain what would tip it — but never just restate
+    # both sides without concluding anything.
+    log("Weighing both sides for a final verdict...")
+    verdict_response = llm.invoke(
+        [
+            (
+                "system",
+                "You are a neutral judge weighing two opposing arguments, both "
+                "already grounded in the same cited sources. Write a final "
+                "verdict in markdown under the heading '## Verdict'.\n"
+                "RULES:\n"
+                "1. Give an actual answer, not a restatement of both sides. If "
+                "the evidence reasonably supports leaning one way, say so "
+                "plainly in your first sentence, then explain why in 2-4 "
+                "sentences.\n"
+                "2. If the honest answer is genuinely 'it depends,' say that "
+                "explicitly and name the specific factors that would tip it "
+                "one way or the other — not as a way to avoid answering, but "
+                "as the actual conclusion.\n"
+                "3. Cite [n] from the sources used in the arguments above.\n"
+                "4. Do not introduce new claims not covered by either side's "
+                "arguments — you are weighing what's already been argued, not "
+                "researching further.",
+            ),
+            (
+                "human",
+                f"Topic: {question}\n\n"
+                f"FOR argument:\n{for_response.content}\n\n"
+                f"AGAINST argument:\n{against_response.content}",
+            ),
+        ]
+    )
+
+    # Step 6 — Combine
     log("Combining debate perspectives...")
     report = (
         f"# Debate: {question}\n\n"
         f"> Two AI agents researched this topic and argued opposite sides "
-        f"using the same {len(sources)} sources.\n\n"
+        f"using the same {len(sources)} sources, then a third pass weighed "
+        f"both to reach a verdict.\n\n"
+        f"{verdict_response.content}\n\n"
+        f"---\n\n"
         f"{for_response.content}\n\n"
         f"---\n\n"
         f"{against_response.content}"
     )
 
-    # Step 6 — Validate citations
+    # Step 7 — Validate citations
     CITATION_RE = re.compile(r"\[(\d+)\]")
     valid_ids = set(sources.keys())
     found_ids = {int(m) for m in CITATION_RE.findall(report)}

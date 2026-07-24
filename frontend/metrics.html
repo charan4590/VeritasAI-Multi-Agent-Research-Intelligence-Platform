@@ -112,14 +112,15 @@ tr:hover td{background:var(--raised);}
 <script>
 async function load() {
   try {
-    const [summary, runs] = await Promise.all([
+    const [summary, runs, nodeAverages] = await Promise.all([
       fetch('/api/metrics/summary').then(r => r.json()),
       fetch('/api/metrics/runs').then(r => r.json()),
+      fetch('/api/metrics/node-averages').then(r => r.json()),
     ]);
 
     renderSummary(summary);
     renderScoreChart(runs);
-    renderNodeChart(runs);
+    renderNodeChart(nodeAverages);
     renderRunsTable(runs);
   } catch(e) {
     document.querySelector('.loading').textContent = 'Could not load metrics: ' + e.message;
@@ -184,32 +185,47 @@ function renderScoreChart(runs) {
   `).join('');
 }
 
-function renderNodeChart(runs) {
-  const el = document.getElementById('nodeChart');
-  if (!runs.length) { el.innerHTML = '<div class="empty">No data yet</div>'; return; }
+// Bug fix: this used to fabricate every bar from a hardcoded percentage
+// split of the overall average latency (see git history) rather than
+// the real per-node timing that's been recorded in node_executions since
+// Phase 3 Milestone 1 — every bar showed a plausible-looking but made-up
+// number, and once /api/metrics/runs started including runs that never
+// finished (see main.py's ConcurrencyLimitExceeded fix), the overall
+// average it was built from collapsed toward 0, showing "~0ms" for
+// every node regardless of the real pipeline. This now renders
+// /api/metrics/node-averages directly — actual AVG(latency_ms) per node
+// name, grouped in SQL, across the most recent runs.
+const PIPELINE_ORDER = [
+  'planner', 'search', 'reflect', 'rag', 'synthesize',
+  'validate', 'fact_verify', 'risk_analyze', 'revise',
+];
 
-  // Simulate node breakdown from total latency
-  // In production this comes from node_executions table
-  const avgMs = runs.reduce((s, r) => s + (r.latency_ms || 0), 0) / runs.length;
-  const nodes = [
-    {name: 'planner', pct: 0.10},
-    {name: 'search', pct: 0.35},
-    {name: 'reflect', pct: 0.08},
-    {name: 'rag + rerank', pct: 0.15},
-    {name: 'synthesize', pct: 0.25},
-    {name: 'validate + eval', pct: 0.07},
+function renderNodeChart(nodeAverages) {
+  const el = document.getElementById('nodeChart');
+  if (!nodeAverages || !nodeAverages.length) {
+    el.innerHTML = '<div class="empty">No node timing data yet — run a research query first.</div>';
+    return;
+  }
+
+  const byName = {};
+  nodeAverages.forEach(n => { byName[n.node_name] = n; });
+  const ordered = [
+    ...PIPELINE_ORDER.filter(n => byName[n]),
+    ...nodeAverages.map(n => n.node_name).filter(n => !PIPELINE_ORDER.includes(n)),
   ];
 
-  const maxMs = avgMs * 0.35; // search is largest
-  el.innerHTML = nodes.map(n => {
-    const ms = Math.round(avgMs * n.pct);
-    const width = Math.round((ms / (avgMs * 0.35)) * 100);
+  const maxMs = Math.max(...nodeAverages.map(n => n.avg_latency_ms || 0), 1);
+  el.innerHTML = ordered.map(name => {
+    const n = byName[name];
+    const ms = Math.round(n.avg_latency_ms || 0);
+    const width = Math.max(2, Math.round((ms / maxMs) * 100));
+    const failNote = n.failures ? ` · ${n.failures} failure${n.failures === 1 ? '' : 's'}` : '';
     return `
       <div class="bar-row">
-        <div class="bar-label">${n.name}</div>
+        <div class="bar-label">${esc(name)}</div>
         <div class="bar-track">
-          <div class="bar-fill latency" style="width:${Math.min(100,width)}%">
-            ~${ms}ms
+          <div class="bar-fill latency" style="width:${width}%">
+            ${ms}ms (${n.executions} run${n.executions === 1 ? '' : 's'}${failNote})
           </div>
         </div>
       </div>

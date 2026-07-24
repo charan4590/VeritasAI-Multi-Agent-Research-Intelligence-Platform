@@ -33,7 +33,7 @@ from typing import Dict, List, Optional
 
 from ..credibility import score_url
 from ..state import AgentState, Source
-from ..tools import fetch_full_content
+from ..tools import fetch_full_content, get_last_search_error
 from .base import Agent
 from .intent import _detect_research_intent
 from .pdf_agent import PDFAgent
@@ -116,6 +116,27 @@ class SupervisorAgent(Agent):
 
         MAX_SOURCES = 20
         MAX_FULL_FETCHES = 6
+
+        # Bug fix: round 1 reliably hits MAX_SOURCES exactly (20 sources),
+        # so round 2 used to call the search API anyway, spend real
+        # Tavily/Serper quota, then throw the results away the instant
+        # the gathering loop below saw len(sources) already >= MAX_SOURCES
+        # — and because "0 new sources added" looked identical to "the
+        # API genuinely returned nothing," the code below wrongly told
+        # the user to go check their API keys/quota. Neither was true;
+        # the cap was just already full. Checking it here, before making
+        # any API call at all, fixes both problems: no wasted quota, and
+        # an accurate log message instead of a false diagnosis.
+        if len(sources) >= MAX_SOURCES:
+            log_entries = [
+                f"Round {state['round']+1}: source cap already reached "
+                f"({len(sources)}/{MAX_SOURCES}) — skipping additional search"
+            ]
+            return {
+                "sources": sources,
+                "round": state["round"] + 1,
+                "log": state["log"] + log_entries,
+            }
 
         # Delegate the actual search call to the appropriate agent.
         if intent == "academic":
@@ -226,6 +247,23 @@ class SupervisorAgent(Agent):
                 f"{pdf_sources_count} added as sources"
             )
         log_entries.append(f"Round {state['round']+1}: gathered {len(sorted_sources)} sources")
+
+        # New sources this round == sources found minus what we walked in
+        # with. If a round adds nothing at all, surface *why* instead of
+        # leaving the user staring at "gathered 0 sources" with no clue
+        # whether it's an invalid/expired TAVILY_API_KEY, a blown quota,
+        # or a network problem.
+        new_this_round = len(sorted_sources) - len(state["sources"])
+        if new_this_round <= 0:
+            search_error = get_last_search_error()
+            if search_error:
+                log_entries.append(f"⚠ Search error: {search_error}")
+            else:
+                log_entries.append(
+                    "⚠ Search returned 0 results for every query — check TAVILY_API_KEY "
+                    "and/or SERPER_API_KEY are valid and have remaining quota "
+                    "(https://app.tavily.com, https://serper.dev)"
+                )
 
         logger.info(
             f"Search round {state['round']+1}: {len(sorted_sources)} sources "
